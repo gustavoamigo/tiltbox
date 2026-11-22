@@ -37,6 +37,10 @@ PHASES = [
 ]
 
 
+# Stats where the phase's worst chunk matters more than its last (printed as the worst).
+WORST_OF = ("maxOverlap", "stepMs")
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -119,10 +123,19 @@ def main():
                     t0 = time.time()
                     s = None
                     done = 0
+                    nan = False
+                    outside = 0
+                    worst = {}
                     while done < frames:  # in chunks so a slow mode cannot hit the evaluate timeout
                         n = min(30, frames - done)
                         s = page.evaluate("(n) => __T.step(n)", n)
                         done += n
+                        if s:  # check every chunk, not only the phase's last
+                            nan = nan or bool(s.get("nan"))
+                            outside = max(outside, s.get("outside", 0) or 0)
+                            for k in WORST_OF:
+                                if isinstance(s.get(k), (int, float)):
+                                    worst[k] = max(worst.get(k, 0), s[k])
                     wall = (time.time() - t0) / frames * 1000
                     err = page.evaluate("__T.error")
                     bad = []
@@ -131,10 +144,11 @@ def main():
                     if s is None:
                         bad.append("no stats")
                     else:
-                        if s.get("nan"):
+                        if nan:
                             bad.append("non-finite state")
-                        if s.get("outside", 0):
-                            bad.append(f"{s['outside']} outside the box")
+                        if outside:
+                            bad.append(f"{outside} outside the box")
+                        s.update(worst)  # print the phase's worst, not the last chunk's
                     page.screenshot(path=str(out / f"{m}-{name}.png"))
                     keys = {k: v for k, v in (s or {}).items() if k not in ("g",)}
                     summary = " ".join(f"{k}={round(v, 3) if isinstance(v, float) else v}" for k, v in keys.items()

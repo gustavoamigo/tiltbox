@@ -267,23 +267,29 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-// One look per mode start: if this device can't keep up, drop a level and start again.
+// Watch the first 30 s of each mode in one-second windows: if this device can't keep up, drop a
+// level and start the mode again. Not one look at the start: a box of marbles that has poured in
+// and fallen asleep costs nothing, and only shows its real cost once it is shaken.
+const WATCH_MS = 30000;
+const WINDOW_FRAMES = 60;
 function autoQuality(now, cpuMs) {
-  if (perfWin.done || !started || now - modeStart < 2000) return;
+  if (perfWin.done || !started || now - modeStart < 1500) return;
+  if (now - modeStart > WATCH_MS) { perfWin.done = true; return; }
   const gap = perfWin.prev ? now - perfWin.prev : 0;
   perfWin.prev = now;
   if (gap > 100) { perfWin.frames = 0; perfWin.cpu = 0; perfWin.t0 = 0; return; } // a stall says nothing about speed
   if (!perfWin.t0) perfWin.t0 = now;
   perfWin.frames++;
   perfWin.cpu += cpuMs;
-  if (perfWin.frames < 120) return;
-  perfWin.done = true;
+  if (perfWin.frames < WINDOW_FRAMES) return;
   const cpu = perfWin.cpu / perfWin.frames;
   const frameMs = (now - perfWin.t0) / (perfWin.frames - 1);
+  perfWin.frames = 0; perfWin.cpu = 0; perfWin.t0 = 0;
   // iOS caps rAF at 30 fps in Low Power Mode and when hot; only slower than that counts.
   const slow = cpu > 11 || (frameMs > 40 && cpu > 6);
   const i = QUALITIES.indexOf(quality);
   if (slow && i > 0) {
+    perfWin.done = true;
     quality = QUALITIES[i - 1];
     toast('Less detail, to keep it smooth');
     switchMode(modeId);
