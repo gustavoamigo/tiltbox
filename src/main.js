@@ -291,12 +291,6 @@ function autoQuality(now, cpuMs) {
 
 // ---------------------------------------------------------------- UI
 
-let hideT = 0;
-function pokeUI() {
-  bar.classList.add('shown');
-  clearTimeout(hideT);
-  if (started) hideT = setTimeout(() => bar.classList.remove('shown'), 4500);
-}
 
 let toastT = 0;
 function toast(msg, ms = 3500) {
@@ -312,18 +306,13 @@ for (const m of MODES) {
   b.dataset.id = m.id;
   b.setAttribute('aria-label', m.name);
   b.innerHTML = `<svg viewBox="0 0 24 24" style="fill:${m.accent}">${m.icon}</svg><span>${m.name}</span>`;
-  b.addEventListener('click', () => { pokeUI(); if (m.id !== modeId || !ready) switchMode(m.id); });
+  b.addEventListener('click', () => { if (m.id !== modeId || !ready) switchMode(m.id); });
   modesEl.appendChild(b);
 }
-$('btn-menu').addEventListener('click', () => {
-  if (bar.classList.contains('shown')) { bar.classList.remove('shown'); clearTimeout(hideT); } else pokeUI();
-});
 $('btn-reset').addEventListener('click', () => {
-  pokeUI();
   if (mode && ready && mode.reset) guard(() => mode.reset()); else switchMode(modeId);
 });
 btnSound.addEventListener('click', () => {
-  pokeUI();
   audio.unlock();
   audio.enabled = !audio.enabled;
   store.set('sound', audio.enabled ? '1' : '0');
@@ -356,7 +345,6 @@ $('btn-start').addEventListener('click', () => {
   if (isTouch) goFullscreen();
   started = true;
   startEl.classList.add('gone');
-  pokeUI();
   keepAwake();
   perm.then((r) => {
     if (isTouch && !window.isSecureContext) { toast('Tilt needs the https:// address. Drag to stir.', 6000); return; }
