@@ -58,6 +58,7 @@ export class BallWorld {
     this.key = f();
     this.W = 1; this.H = 1;
     this.baseR = 1; this.rMin = 1; this.rMax = 1;
+    this.vmax = mat.maxSpeed; // px/s: speed cap for this box (resize)
     for (let i = 0; i < n; i++) { this.rel[i] = radii[i]; this.q[i * 4 + 3] = 1; this.order[i] = i; }
 
     // Walls and fingers: static or kinematic, infinite mass. For a finger, (ox, oy) is where it
@@ -136,6 +137,8 @@ export class BallWorld {
       this.rMax = Math.max(this.rMax, this.r[i]);
       this.rMin = Math.min(this.rMin, this.r[i]);
     }
+    // Speed cap: at most subTravel·rMin per substep at the nominal rate, and never above maxSpeed.
+    this.vmax = Math.min(mat.maxSpeed, mat.subTravel * this.rMin * mat.substepHz);
     const sx = W / oldW, sy = H / oldH;
     this.W = W; this.H = H;
     for (let i = 0; i < n; i++) {
@@ -227,13 +230,15 @@ export class BallWorld {
     }
   }
 
-  // Advance by dt seconds under gravity g (m/s², sim frame).
-  step(dt, g) {
+  // Advance by dt seconds under gravity g (m/s², sim frame). gWake is what decides waking
+  // (default g): the mode passes the true gravity there when g has its shake exaggerated, so
+  // hand tremor, exaggerated along with the shake, still cannot wake a sleeping box.
+  step(dt, g, gWake = g) {
     this.impN = 0;
     this.passes = 0;
     const mat = this.mat;
     if (this.asleep) {
-      const d = Math.hypot(g.x - this.gSleep.x, g.y - this.gSleep.y, g.z - this.gSleep.z);
+      const d = Math.hypot(gWake.x - this.gSleep.x, gWake.y - this.gSleep.y, gWake.z - this.gSleep.z);
       if (d > mat.wakeG || this._fingerNearBall()) this.wake();
       else { this._moveFingers(1); this._noteOverlap(this._measureOverlap()); return; }
     }
@@ -265,7 +270,7 @@ export class BallWorld {
       if (perSub * K > reach) K = Math.max(1, Math.floor(reach / Math.max(perSub, 1e-9)));
       if (K > S - done) K = S - done;
       const horizon = K * hs;
-      this._collide(horizon, gx, gy, Math.min(v, mat.maxSpeed) + gAbs * horizon);
+      this._collide(horizon, gx, gy, Math.min(v, this.vmax) + gAbs * horizon);
       this._buildSupports();
       this._chooseIterations();
       this.passes++;
@@ -286,11 +291,12 @@ export class BallWorld {
     }
     this._moveFingers(0);
     this._integrateOrientation(dt);
-    this._sleep(dt, g);
+    this._sleep(dt, gWake);
     // What is drawn is the state at the frame end: if a ball ran out of projection allowance
-    // in the last pass and still overlaps, clean up with position-only passes.
+    // in the last pass and still overlaps, clean up with position-only passes: a few for a
+    // small overlap, more for a deep one (a whole pile slammed into a wall by a hard shake).
     let worst = this._measureOverlap();
-    for (let r = 0; r < mat.cleanupRounds && worst > mat.cleanupAbove; r++) {
+    for (let r = 0; (r < mat.cleanupRounds && worst > mat.cleanupAbove) || (r < mat.cleanupDeepRounds && worst > mat.cleanupDeep); r++) {
       this._collide(0, gx, gy, 0);
       this._buildSupports();
       for (let it = 0; it < mat.projectIters; it++) this._project();
@@ -370,7 +376,7 @@ export class BallWorld {
     const linK = 1 / (1 + hs * mat.linDamp), angK = 1 / (1 + hs * mat.angDamp);
     // Speed limits go before the solve, so the solver's answer (which keeps contacts apart)
     // is what moves the balls.
-    const vmax = mat.maxSpeed, wmax = 1.5 * mat.maxSpeed;
+    const vmax = this.vmax, wmax = 1.5 * vmax;
     for (let i = 0; i < n; i++) {
       let vx = (this.vx[i] + gx * hs) * linK, vy = (this.vy[i] + gy * hs) * linK;
       const v2 = vx * vx + vy * vy;
@@ -386,7 +392,7 @@ export class BallWorld {
     this._solveGlass(side, press * hs);
     this._shockVelocity(invH);
     for (let i = 0; i < n; i++) {
-      // the solve can speed a ball up (restitution, shock): the margins assume maxSpeed
+      // the solve can speed a ball up (restitution, shock): the margins assume vmax
       let vx = this.vx[i], vy = this.vy[i];
       const v2 = vx * vx + vy * vy;
       if (v2 > vmax * vmax) { const k = vmax / Math.sqrt(v2); vx *= k; vy *= k; this.vx[i] = vx; this.vy[i] = vy; }

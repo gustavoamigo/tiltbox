@@ -25,9 +25,15 @@ const BASE = {
   projectReach: 0.2, // a ball projected further than this (fraction of rMin) forces a new pass
   cleanupAbove: 0.02, // frame end: overlap (fraction of a radius) that gets position-only passes...
   cleanupRounds: 2, // ...at most this many
+  cleanupDeep: 0.06, // deeper than this: up to cleanupDeepRounds (rare: a pile slammed into a wall
+  cleanupDeepRounds: 6, // at the speed cap by an exaggerated shake reached 66% with 2 rounds)
   maxPush: 400, // px/s: fastest the finger pushes a ball out of itself
   speculative: 1.0, // px: contacts are made this far ahead, plus what the motion can close
-  maxSpeed: 5000, // px/s: keeps the motion per substep under half the smallest radius
+  maxSpeed: 9000, // px/s: speed cap, and also at most subTravel·rMin per substep (engine resize):
+  subTravel: 0.45, // under half the smallest radius per substep. 2.4 m/s rubber, 1.7 m/s marbles
+  shakeGain: 3, // the shake (g − gSlow) is multiplied by this; the tilt stays true (boxGravity)...
+  shakeDeadband: 0.5, // m/s²: ...beyond this much of it (hand tremor is about ±0.15)
+  maxG: 45, // m/s²: most in-plane gravity the box gets after that
   linDamp: 0.03, // 1/s air drag
   angDamp: 0.05,
   sleepSpeed: 3, // px/s: below this for sleepTime seconds, everywhere, and the box sleeps
@@ -63,7 +69,10 @@ export const MARBLES = {
   glassFriction: 0.3, // against the back glass, pressed by |g.z|
   glassRollRes: 0.012, // flat phone: rolling resistance arm (fraction of r). A marble starts to roll
   // above ~0.7° of tilt, and on a level phone slows by ~0.08 m/s²: from 0.3 m/s it coasts ~3.5 s
-  glassSpin: 0.08,
+  maxG: 30, // m/s²: a 150-marble pile slammed into the floor at the speed cap by 45 m/s² wedged
+  // its bottom row (single frames to 30% overlap); at 30 the worst of 18 000 shaken frames is 11%
+  glassSpin: 0.02, // drilling resistance arm (× r): a contact patch is tiny. At 0.08, a marble rolling
+  // along the floor of a phone held tilted back (|g.z| ≈ 7) lost a third of its speed to it
   glassBase: 0.2, // m/s²: a little glass contact even upright (the box is not perfectly thin)
   soundMin: 0.06, // m/s approach speed: quieter than this is not heard
   soundFull: 1.1,
@@ -85,20 +94,39 @@ export const BALLS = {
   counts: { low: 26, medium: 38, high: 52 },
   fill: 0.34,
   sizes: [[0.72, 0.35], [1.0, 0.4], [1.35, 0.17], [2.1, 0.08]],
-  restitution: 0.86,
-  wallRestitution: 0.84,
+  restitution: 0.9, // superball
+  wallRestitution: 0.88,
   restThreshold: 0.1,
   friction: 0.75,
   wallFriction: 0.8,
-  rollRes: 0.03,
-  glassFriction: 0.8,
-  glassRollRes: 0.04, // rubber on glass: rolls above ~2.3°, slows by ~0.26 m/s² (3x a marble)
-  glassSpin: 0.25,
+  rollRes: 0.01,
+  glassFriction: 0.2, // low for rubber: in the tilted-back hold, a ball bouncing off the floor
+  // while rolling on the glass loses what friction takes to make it roll the other way (0.8: a
+  // drop came back to 32% of its height instead of 68% upright)
+  glassRollRes: 0.025, // rubber on glass: rolls above ~1.5° (0.04 before; at 0.015 hand tremor kept
+  // a pile on a flat phone creeping instead of falling asleep)
+  glassSpin: 0.02,
   glassBase: 0.2,
   soundMin: 0.08,
   soundFull: 1.6,
   makeLooks: rubberLooks,
 };
+
+// The gravity the balls feel: the tilt (env.gSlow) as it is, the shake (g − gSlow) times
+// mat.shakeGain, because at true scale a hand shake moves the phone a centimetre and barely
+// throws anything. The first shakeDeadband m/s² of shake is passed as it is, so hand tremor is
+// not exaggerated (an awake pile then still falls asleep in a held phone). Only the in-plane
+// part is exaggerated; z (the press on the glass) stays true.
+export function boxGravity(mat, g, gSlow, out) {
+  const dx = g.x - gSlow.x, dy = g.y - gSlow.y;
+  const d = Math.hypot(dx, dy);
+  const k = d > mat.shakeDeadband ? 1 + (mat.shakeGain - 1) * (1 - mat.shakeDeadband / d) : 1;
+  let x = gSlow.x + k * dx, y = gSlow.y + k * dy;
+  const m = Math.hypot(x, y);
+  if (m > mat.maxG) { x *= mat.maxG / m; y *= mat.maxG / m; }
+  out.x = x; out.y = y; out.z = g.z;
+  return out;
+}
 
 // Per-ball looks: 16 bytes each, read by the shaders as four normalized vec4s:
 // c0, c1, c2 colours (sRGB) and p = (type, seed, a, b).

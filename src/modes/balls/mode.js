@@ -2,7 +2,7 @@
 // with impact sounds and haptics. Marbles and Balls are presets of this (presets.js).
 
 import { createGL } from '../../gl.js';
-import { buildWorld, mulberry32 } from './presets.js';
+import { boxGravity, buildWorld, mulberry32 } from './presets.js';
 import { BallRenderer } from './render.js';
 
 const BG_SCALE = { low: 0.6, medium: 0.8, high: 1 }; // panel target, fraction of sim px
@@ -38,6 +38,7 @@ export async function createBallMode(ctx, preset) {
   }
   updateLight({ x: 0, y: 9.81, z: 0 }, 10);
 
+  const gBox = { x: 0, y: 9.81, z: 0 };
   let haptT = 0;
   function sound(dt) {
     haptT -= dt;
@@ -58,7 +59,8 @@ export async function createBallMode(ctx, preset) {
     },
     step(dt, env) {
       world.setFingers(env.pointers, dt);
-      world.step(dt, env.g);
+      // the shake exaggerated, the tilt true; waking is decided on the true gravity
+      world.step(dt, boxGravity(preset, env.g, env.gSlow || env.g, gBox), env.g);
       updateLight(env.g, dt);
       sound(dt);
     },
