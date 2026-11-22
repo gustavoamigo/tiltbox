@@ -8,9 +8,9 @@ import { fillLayers } from './fill.js';
 
 // cell: grid cell (= grain) size in CSS px; draw: sprite diameter in cells.
 const QUALITY = {
-  low: { cell: 4.0, draw: 1.4 },
-  medium: { cell: 3.4, draw: 1.4 },
-  high: { cell: 2.8, draw: 1.4 },
+  low: { cell: 3.0, draw: 1.4 },
+  medium: { cell: 2.5, draw: 1.4 },
+  high: { cell: 2.0, draw: 1.4 },
 };
 const LEVEL = 0.36; // fill height, fraction of the box
 

@@ -24,7 +24,7 @@ PBD's trouble is weight: one Gauss-Seidel sweep a substep cannot carry a pile 70
 
 ## World and units
 
-Sim px and seconds; velocities in px/s; gravity arrives in m/s² and is scaled by `PX_PER_M = 3000`, so the 852 px box is a 28 cm bottle and falls are a little slower than life, which makes them watchable. Cells are `cell` px (fitted so the grid exactly covers the box), and each holds one grain: 2.8 / 3.4 / 4.0 px at high / medium / low, 15.3k / 10.4k / 7.5k grains on a 393×852 box filled to 36%. Speed is capped at 3000 px/s (1 m/s). The occupancy grid has a border of wall cells 3 deep, so lookups need no bounds checks.
+Sim px and seconds; velocities in px/s; gravity arrives in m/s² and is scaled by `PX_PER_M = 3000`, so the 852 px box is a 28 cm bottle and falls are a little slower than life, which makes them watchable. Cells are `cell` px (fitted so the grid exactly covers the box), and each holds one grain: 2.0 / 2.5 / 3.0 px at high / medium / low, 30k / 19k / 13k grains on a 393×852 box filled to 36% (the owner asked for finer sand; until then 2.8 / 3.4 / 4.0 px, and the measurements below were taken at 2.8). At 2.0 px a hard shake costs about 10.6 ms a step headless, against 7 ms at 2.8; auto quality drops a slow phone to medium. Speed is capped at 3000 px/s (1 m/s). The occupancy grid has a border of wall cells 3 deep, so lookups need no bounds checks.
 
 ## A step
 
