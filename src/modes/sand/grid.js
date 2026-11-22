@@ -5,18 +5,17 @@
 // normal force |g.z|) and travels along its velocity cell by cell until something blocks it. A
 // blocked move is an inelastic collision: the grain loses its speed into the obstacle and, by
 // Coulomb friction, up to MU times that much of its sideways speed; a loose grain it hits gets a
-// share of the push, and a hard hit scatters it a little. While gravity jolts (the box is being
-// shaken), grains in flight also get a small random kick, so a slab thrown up breaks into spray.
+// share of the push, and a hard hit scatters it a little, so sand slammed about breaks into spray.
 //
 // Resting grains: a grain is supported when the cell below it is a wall or a grain that is itself
 // at rest ("below" is one of the eight grid directions, picked per grain and substep between the
 // two nearest to gravity in proportion to the angle). Cells are visited from the bottom up, so the
 // grain below has been settled before the one above asks: a pile whose floor drops away falls as
 // one block, not layer by layer. A supported grain on the surface measures the local slope from
-// the free cells within 2 cells of it and compares it with real angles: steeper than REPOSE and it
-// slides to the free neighbour cell most nearly downhill; once sliding it keeps going until the
+// the free cells within NR cells of it and compares it with real angles: steeper than REPOSE and
+// it slides to the free neighbour cell most nearly downhill; once sliding it keeps going until the
 // slope is below REPOSE_FLOW. Both angles are against gravity, not the grid, so piles look the
-// same at any tilt.
+// same at any tilt. Grains just under a too-steep surface slide with it (an avalanche is a slab).
 //
 // Rest is exact: a grain that cannot move falls asleep and costs nothing until a neighbour moves
 // or gravity turns. No creep, no jitter.
@@ -42,10 +41,9 @@ export const P = {
   NR: 3, // cells: radius of the window the surface slope is measured over
   ACTIVE: 6, // substeps a grain counts as sliding after it last moved
   STIR: 2, // substeps a grain next to a sliding one counts as sliding
+  PUSH: 90, // cells: how far a finger looks for room to shove a grain into
   SCATTER: 0.08, // random sideways kick on a hard collision, as a fraction of the speed lost
   V_SCATTER: 400, // px/s: collisions harder than this scatter
-  JITTER: 0.06, // random kick to grains in flight per substep: this times the change of g since
-  //               the last frame, applied for one substep (spray from shakes, not from a slow turn)
   V_MAX: 3000, // px/s cap (1 m/s)
   WAKE_DEG: 1.5, // gravity turning this much wakes the surface to look at its slope again
   SUB_DT: 1 / 180, // s, longest substep
@@ -93,13 +91,12 @@ export class SandGrid {
     this.rowLo = new Int32Array(0); this.rowHi = new Int32Array(0); // where in a row they are
     this.colLo = new Int32Array(0); this.colHi = new Int32Array(0); // (bounds only grow until empty)
     this.nAwake = 0;
-    this.fingerR = 22; // px
+    this.fingerR = 24; // px: a fingertip is about 9 mm across
     this.fingers = [];
     this.wakeG = { x: 0, y: 0, z: 0 }; // gravity when the surface last looked at its slopes
-    this.hits = 0; // speed lost in collisions this step, summed over grains, px/s (sound)
-    this.hard = 0; // the same, from collisions harder than V_SCATTER only
+    this.hard = 0; // speed lost in collisions harder than V_SCATTER this step, summed, px/s (sound)
     this.moved = 0; // grains that changed cell this step
-    this.ctx = { h: 0, Gx: 0, Gy: 0, glass: 0, inPlane: false, ux: 0, uy: 1, cosS: 1, cosF: 1, sinS: 0, slideDv: 0, kick: 0 };
+    this.ctx = { h: 0, Gx: 0, Gy: 0, glass: 0, inPlane: false, ux: 0, uy: 1, cosS: 1, cosF: 1, sinS: 0, slideDv: 0 };
   }
 
   // Padded index of cell (x, y).
@@ -246,23 +243,30 @@ export class SandGrid {
     }
   }
 
-  // Fingers this frame: [{x, y, vx, vy}] in sim px and px/s.
+  // Fingers this frame: [{id, x, y, vx, vy}] in sim px and px/s. Each remembers where it was
+  // last frame, to be swept from there.
   setFingers(list) {
-    this.fingers.length = 0;
-    if (list) for (const p of list) this.fingers.push(p);
+    const old = this.fingers;
+    const now = [];
+    if (list) {
+      for (const p of list) {
+        const o = old.find((q) => q.id === p.id);
+        let vx = p.vx || 0, vy = p.vy || 0;
+        const s = Math.sqrt(vx * vx + vy * vy), vm = 2500;
+        if (s > vm) { vx *= vm / s; vy *= vm / s; }
+        now.push({ id: p.id, x0: o ? o.x : p.x, y0: o ? o.y : p.y, x: p.x, y: p.y, vx, vy });
+      }
+    }
+    this.fingers = now;
   }
 
   // g: effective gravity in m/s², sim frame (z toward the back glass).
   // Substeps of at most SUB_DT; when only a few grains are awake (an avalanche, a trickle) of
   // SUB_DT_FEW, since the pile rules move a grain one cell per substep and they are cheap then.
   step(dt, g) {
-    this.hits = 0;
     this.hard = 0;
     this.moved = 0;
     if (!this.n || !(dt > 0)) return;
-    const lg = this.lastG;
-    const jolt = lg ? Math.sqrt((g.x - lg.x) * (g.x - lg.x) + (g.y - lg.y) * (g.y - lg.y)) : 0;
-    this.lastG = { x: g.x, y: g.y };
     // Gravity turned since the surface last checked its slopes, or the back glass let go: the
     // surface looks again. The rest of the pile need not: a grain whose support falls away is
     // woken by it before the sweep reaches it, so a pile still falls as one.
@@ -278,12 +282,13 @@ export class SandGrid {
       const few = this.nAwake < P.FEW * this.n;
       const nLeft = Math.ceil((dt - t) / (few ? P.SUB_DT_FEW : P.SUB_DT) - 1e-6);
       const h = (dt - t) / nLeft;
-      this.substep(h, g, jolt);
       t += h;
+      this.substep(h, g, t / dt);
     }
   }
 
-  substep(h, g, jolt) {
+  // u: how far through the frame this substep ends (0..1], for sweeping the fingers.
+  substep(h, g, u = 1) {
     const { gw, gh, occ, stamp, awake, rowAwake, colAwake, stride, ctx } = this;
     const tick = ++this.tick;
     const Gx = g.x * PX_PER_M, Gy = g.y * PX_PER_M;
@@ -303,8 +308,7 @@ export class SandGrid {
     ctx.cosF = Math.cos((P.REPOSE_FLOW * Math.PI) / 180);
     ctx.sinS = Math.sin((P.REPOSE * Math.PI) / 180);
     ctx.slideDv = P.SLIDE_G * Gl * h;
-    ctx.kick = P.JITTER * jolt * PX_PER_M * h;
-    this.applyFingers();
+    this.applyFingers(u, ctx);
     if (!this.nAwake) return;
 
     // Visit cells from the leading edge along gravity, so a column falls as one and a grain
@@ -339,6 +343,8 @@ export class SandGrid {
   update(i, c0, d, ctx) {
     const { occ, vx, vy, ox, oy, act, stride } = this;
     let vxi = vx[i], vyi = vy[i];
+    // The back glass holds everything that is not already moving (a phone lying flat).
+    if (!ctx.inPlane && vxi === 0 && vyi === 0) { this.sleep(i); return; }
     const below = occ[c0 + DY[d] * stride + DX[d]];
     const supported = below === WALL || (below >= 0 && (!this.awake[below] || this.held[below] === this.tick));
     if (supported && vxi * vxi + vyi * vyi < P.V_SLIDE * P.V_SLIDE) {
@@ -361,7 +367,6 @@ export class SandGrid {
     }
     const h = ctx.h;
     vxi += ctx.Gx * h; vyi += ctx.Gy * h;
-    if (ctx.kick > 0) { vxi += (rnd() - 0.5) * ctx.kick; vyi += (rnd() - 0.5) * ctx.kick; }
     let s2 = vxi * vxi + vyi * vyi;
     const glass = ctx.glass;
     if (glass > 0) {
@@ -419,7 +424,6 @@ export class SandGrid {
     }
     if (c !== c0) this.move(i, c0, c, false);
     if (lost > 0) {
-      this.hits += lost;
       // a hard hit scatters the grain a little, so a slab of sand thrown about breaks into spray
       if (lost > P.V_SCATTER) {
         this.hard += lost;
@@ -517,6 +521,18 @@ export class SandGrid {
     return best;
   }
 
+  // Move grain i from padded cell c0 to the free cell c1 and wake it; nothing else.
+  shift(i, c0, c1) {
+    const { occ, stride } = this;
+    occ[c0] = EMPTY;
+    occ[c1] = i;
+    const x0 = this.cx[i], y0 = this.cy[i];
+    const y1 = ((c1 / stride) | 0) - PAD, x1 = c1 - (y1 + PAD) * stride - PAD;
+    this.cx[i] = x1; this.cy[i] = y1;
+    if (this.awake[i]) { this.leave(x0, y0); this.enter(x1, y1); } else this.wake(i);
+    this.moved++;
+  }
+
   // Move grain i from padded cell c0 to the free cell c1. `wide`: a slide, which changes the
   // slope its neighbours see, so everything within 2 cells of both cells wakes; a grain in flight
   // only wakes the 8 around the cell it left (one of them may have rested on it).
@@ -532,27 +548,70 @@ export class SandGrid {
     if (wide) { this.wakeAround(c0, 2, P.STIR); this.wakeAround(c1, 2, P.STIR); } else this.wakeAround(c0, 1, 0);
   }
 
-  // Fingers push the grains under them out along the radius and drag them with their motion.
-  applyFingers() {
-    if (!this.fingers.length) return;
-    const { gw, gh, occ, vx, vy, act, sx, sy } = this;
-    const R = this.fingerR;
-    for (const f of this.fingers) {
-      const x0 = Math.max(0, Math.floor((f.x - R) / sx)), x1 = Math.min(gw - 1, Math.floor((f.x + R) / sx));
-      const y0 = Math.max(0, Math.floor((f.y - R) / sy)), y1 = Math.min(gh - 1, Math.floor((f.y + R) / sy));
+  // A finger is a stick through the sand, swept from where it was last frame to where it is now
+  // (u: how far through the frame). Each grain under it is shoved out along a line of cells: the
+  // most nearly outward direction (leaning "up") that reaches a free cell within PUSH cells. The
+  // whole line shifts by one cell into that free cell, so deep in the pile the sand above the
+  // finger rises, near the surface the finger digs a trench that slumps back behind it, and the
+  // grains it shoves take some of its speed (a flick throws sand).
+  applyFingers(u, ctx) {
+    const F = this.fingers;
+    if (!F.length) return;
+    const { gw, gh, occ, vx, vy, stride, sx, sy } = this;
+    const R = this.fingerR, maxK = P.PUSH;
+    const list = this.pushList || (this.pushList = []);
+    for (const f of F) {
+      const fx = f.x0 + (f.x - f.x0) * u, fy = f.y0 + (f.y - f.y0) * u;
+      const x0 = Math.max(0, Math.floor((fx - R) / sx)), x1 = Math.min(gw - 1, Math.floor((fx + R) / sx));
+      const y0 = Math.max(0, Math.floor((fy - R) / sy)), y1 = Math.min(gh - 1, Math.floor((fy + R) / sy));
+      // grains under the finger, outermost first, so each line shifts out cleanly
+      list.length = 0;
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
-          const i = occ[this.idx(x, y)];
-          if (i < 0) continue;
-          const dx = (x + 0.5) * sx - f.x, dy = (y + 0.5) * sy - f.y;
-          const d = Math.sqrt(dx * dx + dy * dy) || 1;
-          if (d >= R) continue;
-          const k = 1 - d / R;
-          // out of the finger, and along with it
-          vx[i] += (f.vx - vx[i]) * 0.4 * k + (dx / d) * 500 * k;
-          vy[i] += (f.vy - vy[i]) * 0.4 * k + (dy / d) * 500 * k;
-          act[i] = P.ACTIVE;
-          this.wake(i);
+          const dx = (x + 0.5) * sx - fx, dy = (y + 0.5) * sy - fy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < R * R && occ[this.idx(x, y)] >= 0) list.push(d2, x, y);
+        }
+      }
+      const m = list.length / 3;
+      const order = this.pushOrder && this.pushOrder.length >= m ? this.pushOrder : (this.pushOrder = new Int32Array(Math.max(64, m * 2)));
+      for (let k = 0; k < m; k++) order[k] = k;
+      order.subarray(0, m).sort((a, b) => list[3 * b] - list[3 * a]);
+      for (let t = 0; t < m; t++) {
+        const k = order[t], x = list[3 * k + 1], y = list[3 * k + 2];
+        const c = this.idx(x, y);
+        if (occ[c] < 0) continue;
+        let dx = (x + 0.5) * sx - fx, dy = (y + 0.5) * sy - fy;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d > 1e-3) { dx /= d; dy /= d; } else { dx = -ctx.ux; dy = -ctx.uy; }
+        // the eight directions, most outward first, "up" breaking ties
+        let tried = 0;
+        for (let pass = 0; pass < 8; pass++) {
+          let e = -1, best = -9;
+          for (let q = 0; q < 8; q++) {
+            if (tried & (1 << q)) continue;
+            const sc = (DX[q] * dx + DY[q] * dy) * DL[q] - 0.6 * (DX[q] * ctx.ux + DY[q] * ctx.uy) * DL[q];
+            if (sc > best) { best = sc; e = q; }
+          }
+          tried |= 1 << e;
+          const step = DY[e] * stride + DX[e];
+          let kk = 1;
+          while (kk <= maxK && occ[c + kk * step] >= 0) kk++;
+          if (kk > maxK || occ[c + kk * step] !== EMPTY) continue;
+          // shift the line out by one cell, farthest grain first; the grains near the finger take
+          // its speed, and every grain of the line wakes to look at its new neighbourhood
+          for (let j = kk - 1; j >= 0; j--) {
+            const from = c + j * step, g = occ[from];
+            this.shift(g, from, from + step);
+            if (j < 3) {
+              vx[g] += (f.vx - vx[g]) * 0.5 + DX[e] * DL[e] * 120;
+              vy[g] += (f.vy - vy[g]) * 0.5 + DY[e] * DL[e] * 120;
+            }
+            this.act[g] = P.ACTIVE;
+          }
+          this.wakeAround(c + kk * step, 2, P.STIR);
+          this.wakeAround(c, 2, P.STIR);
+          break;
         }
       }
     }

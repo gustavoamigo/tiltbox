@@ -28,6 +28,7 @@ in vec2 v_p;
 uniform vec2 u_box;
 uniform vec2 u_up;
 uniform sampler2D u_occ;
+uniform vec2 u_texel; // one grid cell in uv
 out vec4 o;
 void main() {
   vec2 uv = v_p / u_box;
@@ -36,8 +37,12 @@ void main() {
   vec3 col = mix(vec3(0.030, 0.028, 0.034), vec3(0.105, 0.096, 0.108), smoothstep(0.0, 1.0, h));
   vec2 e = abs(uv - 0.5) * 2.0;
   col *= 1.0 - 0.35 * pow(max(e.x, e.y), 6.0);
-  // inside the sand, gaps between grains are shadow, not the box behind
-  float sand = smoothstep(0.3, 0.6, texture(u_occ, uv).r);
+  // Inside the sand, gaps between grains are shadow, not the box behind. Samples half a cell to
+  // each side close a gap one cell wide; wider ones stay open.
+  vec2 hx = vec2(0.5 * u_texel.x, 0.0), hy = vec2(0.0, 0.5 * u_texel.y);
+  float occ = max(max(texture(u_occ, uv + hx).r, texture(u_occ, uv - hx).r),
+                  max(texture(u_occ, uv + hy).r, texture(u_occ, uv - hy).r));
+  float sand = smoothstep(0.3, 0.6, occ);
   col = mix(col, vec3(0.15, 0.11, 0.08), sand);
   o = vec4(col, 1.0);
 }`;
@@ -141,9 +146,9 @@ export class SandRenderer {
     this.dirty = true;
   }
 
-  // Upload what the sim changed: positions (sim px) and the occupancy grid.
-  update(grid, force) {
-    if (!force && !this.dirty && !grid.moved && !grid.nAwake) return;
+  // Upload what the sim changed (the mode sets `dirty`): positions (sim px) and the occupancy.
+  update(grid) {
+    if (!this.dirty) return;
     this.dirty = false;
     const gl = this.gl;
     const { n, gw, gh } = grid;
@@ -171,7 +176,7 @@ export class SandRenderer {
   // g: the gravity the sand feels (m/s²), for the lighting; grains drawn at `grainScale` cells.
   draw(view, grid, g, grainScale) {
     const gl = this.gl;
-    this.update(grid, false);
+    this.update(grid);
     gl.viewport(0, 0, view.pxW, view.pxH);
     gl.disable(gl.BLEND);
     const W = view.simW, H = view.simH;
@@ -189,6 +194,7 @@ export class SandRenderer {
     gl.uniform2f(this.bg.u.u_box, W, H);
     gl.uniform2f(this.bg.u.u_up, ux, uy);
     gl.uniform1i(this.bg.u.u_occ, 0);
+    gl.uniform2f(this.bg.u.u_texel, 1 / grid.gw, 1 / grid.gh);
     this.quad.draw();
 
     const cell = Math.max(grid.sx, grid.sy);

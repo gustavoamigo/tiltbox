@@ -22,14 +22,19 @@ export default async function create(ctx) {
   // room for a full box at any orientation of this screen
   const cap = Math.ceil((view0.simW / q.cell + 2) * (view0.simH / q.cell + 2));
   const grid = new SandGrid(cap, q.cell);
-  const renderer = new SandRenderer(gl, cap);
+  let renderer = new SandRenderer(gl, cap);
   const rgba = new Uint8Array(cap * 4);
   const bed = ctx.audio.bed('sand');
   let filled = false;
   let lastG = { x: 0, y: 9.81, z: 0 };
   let level = 0, tone = 0, tickTokens = 0, slamCool = 0;
 
+  // A lost context (iOS may drop one in the background) comes back empty: build the GL side again.
   ctx.canvas.addEventListener('webglcontextlost', (e) => e.preventDefault());
+  ctx.canvas.addEventListener('webglcontextrestored', () => {
+    renderer = new SandRenderer(gl, cap);
+    renderer.setColours(rgba, grid.n);
+  });
 
   function refill() {
     const n = fillLayers(grid, rgba, LEVEL);
@@ -37,7 +42,7 @@ export default async function create(ctx) {
     filled = true;
   }
 
-  function soundAndTouch(dt, env) {
+  function soundAndTouch(dt) {
     // bed: how much sand moves and how fast
     let moving = 0, speed = 0;
     const { n, vx, vy } = grid;
@@ -66,7 +71,6 @@ export default async function create(ctx) {
     // a slam of the whole pile against a wall: a short buzz
     slamCool -= dt;
     if (hard > 2.5 && slamCool <= 0) { ctx.haptic(Math.min(1, hard / 12)); slamCool = 0.12; }
-    void env;
   }
 
   return {
@@ -80,7 +84,8 @@ export default async function create(ctx) {
       lastG = env.g;
       grid.setFingers(env.pointers);
       grid.step(dt, env.g);
-      soundAndTouch(dt, env);
+      if (grid.moved || grid.nAwake) renderer.dirty = true; // several steps may come before a render
+      soundAndTouch(dt);
     },
 
     render(view) {
