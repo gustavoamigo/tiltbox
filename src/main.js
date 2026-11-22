@@ -405,7 +405,7 @@ let warmed = false;
 function warmModes() {
   if (warmed || TEST) return;
   warmed = true;
-  setTimeout(() => { for (const m of MODES) m.load().catch(() => {}); }, 3000);
+  setTimeout(() => { for (const m of MODES) m.load().catch(() => {}); }, 1200);
 }
 
 // ---------------------------------------------------------------- debug overlay
