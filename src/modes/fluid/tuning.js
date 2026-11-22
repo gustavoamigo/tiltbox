@@ -43,7 +43,7 @@ export const WATER = {
   // A dam: a block against the left wall, released at once.
   seed: (x, y) => Math.max(x / 0.7, (1 - y) / 0.72),
   look: {
-    pattern: 0,
+    pattern: 2, // plain glass: the owner asked for no dots behind the water
     tileSize: 22,
     bgTop: [0.03, 0.04, 0.062],
     bgBot: [0.012, 0.018, 0.032],

@@ -114,7 +114,7 @@ uniform float uTime;
 uniform float uWobble;    // refraction ripple, sim px (grows with motion)
 
 // look (presets.js)
-uniform int uPattern;     // 0: mosaic tiles, 1: honeycomb
+uniform int uPattern;     // 0: dots, 1: honeycomb, 2: none (plain glass)
 uniform vec3 uBgTop, uBgBot; // the dry back glass, top and bottom
 uniform vec3 uTileA, uTileB, uGroutCol;
 uniform float uTileSize;
@@ -156,6 +156,7 @@ float vnoise(vec2 p) {
 // The pattern on the back glass. Returns (pattern 0..1: 1 on a mark, its shade 0..1).
 // aa: the pattern's anti-aliasing width in pattern units (no derivatives: called in branches).
 vec2 pattern(vec2 p, float aa) {
+  if (uPattern == 2) return vec2(0.0); // plain glass: no marks
   if (uPattern == 0) {
     // a grid of small dots, every other row offset: fine enough to show the lens at the edges
     vec2 g = p / uTileSize;
