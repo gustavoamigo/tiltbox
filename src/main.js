@@ -149,6 +149,7 @@ async function switchMode(id) {
     perfWin.frames = 0; perfWin.cpu = 0; perfWin.t0 = 0; perfWin.prev = 0; perfWin.done = qualityFixed;
     ready = true;
     if (!paused) mode.render(view);
+    warmModes();
   } catch (e) {
     if (my === token) fail(e);
   }
@@ -366,6 +367,46 @@ document.addEventListener('visibilitychange', () => {
     if (audio.resume) audio.resume();
   } else if (audio.suspend) audio.suspend();
 });
+
+// ---------------------------------------------------------------- installing as an app
+
+const standalone = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches || navigator.standalone === true;
+const btnInstall = $('btn-install');
+let installEvt = null;
+// Chrome and Edge offer installation through this event; keep it for our own button.
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installEvt = e;
+  btnInstall.hidden = false;
+});
+window.addEventListener('appinstalled', () => {
+  installEvt = null;
+  btnInstall.hidden = true;
+  toast('Installed. Tiltbox is on your home screen.');
+});
+btnInstall.addEventListener('click', () => {
+  if (!installEvt) return;
+  const e = installEvt;
+  installEvt = null;
+  btnInstall.hidden = true;
+  e.prompt();
+});
+// iOS has no install prompt: say where Safari keeps it.
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (isIOS && !standalone) $('ios-install').hidden = false;
+
+if ('serviceWorker' in navigator && window.isSecureContext && !TEST) {
+  navigator.serviceWorker.register('sw.js').catch(() => { /* e.g. a self-signed dev certificate */ });
+}
+
+// Load every mode once in the background: switching is instant, and the service worker caches
+// them all, so every mode works offline after one visit.
+let warmed = false;
+function warmModes() {
+  if (warmed || TEST) return;
+  warmed = true;
+  setTimeout(() => { for (const m of MODES) m.load().catch(() => {}); }, 3000);
+}
 
 // ---------------------------------------------------------------- debug overlay
 

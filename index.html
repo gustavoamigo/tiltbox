@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#05070d">
 <title>Tiltbox</title>
-<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<meta name="description" content="Your screen is a glass box. Fill it with water, honey, marbles, bouncy balls, sand or snow, then tilt it, shake it and stir it with a finger.">
+<link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/svg+xml" href="icons/favicon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -45,6 +47,13 @@
     <p class="hint touch-only">Allow motion access when asked.</p>
     <p class="hint desk-only">← → tilt · space shake · drag to stir<br>or drag the browser window around</p>
     <p class="hint warn" id="insecure">Tilt needs HTTPS: open the https:// address.</p>
+    <button id="btn-install" hidden>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10.5l5 5 5-5"/><path d="M5 20h14"/></svg>
+      Install app
+    </button>
+    <p class="hint" id="ios-install" hidden>To install: tap
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Share"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M6 11H5v10h14V11h-1"/></svg>
+      then <b>Add to Home Screen</b>.</p>
   </div>
 </div>
 

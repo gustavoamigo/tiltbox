@@ -192,6 +192,21 @@ button svg[fill="none"] .fill { fill: var(--ui-fg); }
   box-shadow: 0 8px 30px rgba(60, 160, 255, 0.35);
 }
 .hint { margin: 16px 0 0; font-size: 13px; opacity: 0.65; }
+.hint svg { vertical-align: -2px; }
+#btn-install {
+  margin-top: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 20px;
+  border-radius: 22px;
+  border: 1px solid var(--ui-line);
+  background: var(--ui-bg);
+  font-size: 15px;
+  font-weight: 600;
+}
+#btn-install[hidden] { display: none; }
+#btn-install svg { stroke: var(--ui-fg); fill: none; }
 .hint.warn { color: #ffc36b; opacity: 1; display: none; }
 body.insecure .hint.warn { display: block; }
 body.touch .desk-only, body:not(.touch) .touch-only { display: none; }
