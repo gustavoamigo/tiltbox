@@ -9,7 +9,7 @@
 //       (clamped to 0.25..4; 0.5..2 sounds best). 'chime' is always G6 × pitch, so pitch is its note.
 //       Cheap to call; the engine limits voices and rate, so modes may call it freely per contact.
 //   audio.bed(kind) -> { set(level, tone), stop() }
-//       a continuous texture. kind: 'water' | 'honey' | 'sand' | 'swirl'
+//       a continuous texture. kind: 'water' | 'honey' | 'sand' | 'swirl' | 'fizz'
 //       level 0..1 (how much is moving), tone 0..1 (how bright/fast). Call set() every frame.
 //   audio.suspend() / audio.resume()    page hidden / shown (main.js)
 // Unknown kinds are ignored. Everything is a no-op before unlock, while disabled and while the
@@ -29,7 +29,7 @@
 
 const IMPACT_KINDS = ['glass', 'rubber', 'grain', 'drop', 'chime'];
 const KIND_INDEX = new Map(IMPACT_KINDS.map((k, i) => [k, i]));
-const BED_KINDS = new Set(['water', 'honey', 'sand', 'swirl']);
+const BED_KINDS = new Set(['water', 'honey', 'sand', 'swirl', 'fizz']);
 const DROP = 3;
 
 const MAX_VOICES = 24;
@@ -281,6 +281,29 @@ function crackle(n, sr, rand) {
   return out;
 }
 
+// Fizz texture: carbonation, tiny bubbles bursting (~1100/s): each a ringing ping of 0.15-0.6 ms
+// at 2.5-9 kHz, amplitudes mostly small with a few louder ones. Wraps around like the crackle.
+function popcorn(n, sr, rand) {
+  const out = new Float32Array(n);
+  const count = Math.round((1100 * n) / sr);
+  for (let g = 0; g < count; g++) {
+    const at = Math.floor(rand() * n);
+    const u = rand();
+    const a = (0.15 + 0.85 * u * u * u) * (rand() < 0.5 ? -1 : 1);
+    const w = (2 * Math.PI * (2500 + 6500 * rand())) / sr;
+    const k = Math.exp(-1 / ((0.00015 + 0.00045 * rand()) * sr));
+    let e = a;
+    for (let j = 0; e * e > 1e-8 && j < n; j++) {
+      out[(at + j) % n] += Math.sin(w * j) * e;
+      e *= k;
+    }
+  }
+  let peak = 0;
+  for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(out[i]));
+  for (let i = 0; i < n; i++) out[i] /= peak;
+  return out;
+}
+
 // Output stage curve: unity below 0.7, then a tanh knee that ends at 0.92 for input ±1 (and
 // WaveShaper clamps beyond ±1), so the output can never reach full scale.
 function softClipCurve() {
@@ -452,7 +475,7 @@ export function createSynth(ctx) {
 
   // ------------------------------------------------ beds
 
-  let noiseBuf = null, crackleBuf = null;
+  let noiseBuf = null, crackleBuf = null, fizzBuf = null;
   function stereo(make) {
     const n = Math.round(2 * sr); // 2 s loops, independent channels
     const buf = ctx.createBuffer(2, n, sr);
@@ -467,6 +490,10 @@ export function createSynth(ctx) {
   function grains() {
     if (!crackleBuf) { const rand = mulberry32(777); crackleBuf = stereo((n) => crackle(n, sr, rand)); }
     return crackleBuf;
+  }
+  function pops() {
+    if (!fizzBuf) { const rand = mulberry32(4242); fizzBuf = stereo((n) => popcorn(n, sr, rand)); }
+    return fizzBuf;
   }
   function loop(buf) {
     const s = ctx.createBufferSource();
@@ -605,7 +632,22 @@ export function createSynth(ctx) {
     });
   }
 
-  const BEDS = { water, honey, sand, swirl };
+  // Fizz: the pops loop high-passed, played faster and brighter as it foams up (tone), its level
+  // fluttering a little so a steady fizz never sounds like a loop.
+  function fizz() {
+    const src = loop(pops());
+    const hp = filter('highpass', 2200, 0.7), lp = filter('lowpass', 9000, 0.5), body = gain(0), out = gain(1);
+    chain(src, hp, lp, body, out);
+    let w = 0;
+    return makeBed([src], out, (level, tone, at, dt) => {
+      w = wander(w, dt, 0.2);
+      steer(src.playbackRate, 0.8 + 0.45 * tone, at, 0.1);
+      steer(lp.frequency, 6500 + 5000 * tone, at, 0.1);
+      steer(body.gain, 0.26 * level * Math.max(0.3, 1 + 0.25 * w), at, 0.05);
+    });
+  }
+
+  const BEDS = { water, honey, sand, swirl, fizz };
 
   return {
     ctx,

@@ -7,6 +7,11 @@ export const MODES = [
     load: () => import('./water.js'),
   },
   {
+    id: 'beer', name: 'Beer', accent: '#ffd35a',
+    icon: '<path d="M6.2 9.2h11.6l-1.3 11.9a1.1 1.1 0 0 1-1.1 1H8.6a1.1 1.1 0 0 1-1.1-1z"/><circle cx="8.2" cy="6.9" r="2.7"/><circle cx="12" cy="5.4" r="3.1"/><circle cx="15.8" cy="6.9" r="2.7"/>',
+    load: () => import('./beer.js'),
+  },
+  {
     id: 'honey', name: 'Honey', accent: '#ffb53a',
     icon: '<path d="M12 2.2l8 4.6v9.2l-8 4.6-8-4.6V6.8z"/>',
     load: () => import('./honey.js'),

@@ -96,7 +96,7 @@ Budget per frame, measured in headless Chromium on the development desktop with 
 ```js
 audio.impact(kind, intensity, pitch = 1)  // one-shot hit; kind 'glass' | 'rubber' | 'grain' | 'drop' | 'chime'
                                           // intensity 0..1, pitch a multiplier around the kind's base
-audio.bed(kind) -> { set(level, tone), stop() }   // continuous; kind 'water' | 'honey' | 'sand' | 'swirl'
+audio.bed(kind) -> { set(level, tone), stop() }   // continuous; kind 'water' | 'honey' | 'sand' | 'swirl' | 'fizz'
                                           // level 0..1 how much is moving, tone 0..1 how fast/bright; set() every frame
 ```
 

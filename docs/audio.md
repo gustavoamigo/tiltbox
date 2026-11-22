@@ -24,6 +24,7 @@ Every sound is synthesised with Web Audio; there are no sample files. Modes use 
 | `honey` | noise → high-pass → resonant low-pass at (400 + 450·tone) Hz, slow (τ 0.2 s) | an occasional slow low bloop |
 | `sand` | a pre-made crackle loop (2500 tiny grains/s) high-passed at 1.5–4 kHz, played faster with tone, level fluttering; a little air above 6 kHz | |
 | `swirl` | two band-passes an octave apart at (300 + 1000·tone) Hz under a low-pass | |
+| `fizz` | high-passed noise in sparse crackling grains, for carbonation (beer); level from the bubbles and head | |
 
 **Voices and rate.** `impact()` only records a candidate in preallocated typed arrays; a microtask after the frame's task plays the loudest few, loudest first. Per kind there is a token bucket (`rate` hits/s, `burst`) and a per-frame cap; the whole engine has 24 voices. A new hit takes a free voice, or steals the quietest playing one (its current loudness estimated from its gain and decay constant) if the new hit is louder, fading it over ~5 ms; otherwise it is dropped. Hits from one frame start spread over 12 ms, so a burst is a rattle rather than one loud flam. A recent-hit density (80 ms window) scales each hit by 1/√(1 + density/4), so 400 clacks a second are only a few dB louder than one.
 
