@@ -169,8 +169,9 @@ function haptic(strength = 0.5) {
 
 const pointers = new Map();
 let testPointers = null;
-const env = { g: motion.g, shake: 0, pointers: [], time: 0, dt: 0, source: 'desktop' };
+const env = { g: motion.g, gSlow: motion.lp, shake: 0, pointers: [], time: 0, dt: 0, source: 'desktop' };
 const screenG = { x: 0, y: 0, z: 0 };
+const screenGSlow = { x: 0, y: 0, z: 0 };
 
 function stagePos(e) {
   const r = stage.getBoundingClientRect();
@@ -222,11 +223,15 @@ const perfWin = { frames: 0, cpu: 0, t0: 0, prev: 0, done: false };
 function tick(dt) {
   motion.update(dt);
   env.g = motion.g;
+  env.gSlow = motion.lp;
   if (motion.source === 'desktop' && view.angle) {
     // No sensor (desktop keys, http, refused, none): 'down' is the screen's down, whatever the angle.
     const r = view.vecToSim(motion.g.x, motion.g.y);
     screenG.x = r.x; screenG.y = r.y; screenG.z = motion.g.z;
     env.g = screenG;
+    const q = view.vecToSim(motion.lp.x, motion.lp.y);
+    screenGSlow.x = q.x; screenGSlow.y = q.y; screenGSlow.z = motion.lp.z;
+    env.gSlow = screenGSlow;
   }
   env.shake = motion.shake;
   env.dt = dt;

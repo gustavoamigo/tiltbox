@@ -39,6 +39,7 @@ A phone reports proper acceleration `f = a − g` in its own frame (x right, y u
 - Upright phone: `g ≈ (0, 9.81, 0)`.
 - Lying flat face up: `g ≈ (0, 0, 9.81)`: nothing in the screen plane, everything pressed against the back glass. Modes use `|g.z|` as the normal force for friction against the glass, so sand on a flat phone stays where it is and marbles roll slowly to a stop.
 - Shaking: `g` swings by tens of m/s² for fractions of a second. `env.shake` is a high-passed magnitude (m/s²), for effects that want to know "being shaken now" (sparkle, haptics).
+- `env.gSlow` is `g` low-passed over 0.35 s: the tilt without the shake. A hand shake moves a phone only a centimetre or so, which at true scale barely stirs the contents; a mode that should respond more exaggerates the shake alone with `gSlow + k·(g − gSlow)`, leaving the tilt true.
 
 iOS has historically reported `accelerationIncludingGravity` with the opposite sign to the spec. `motion.js` checks the sign against `deviceorientation` (beta, gamma follow the spec on both platforms) and corrects it; before the check settles it guesses from how phones are usually held. `?flip=1` / `?flip=0` force it.
 
@@ -67,7 +68,7 @@ ctx = {
 mode.resize(view)      // the box changed size or turned (also called once after create). Keep the
                        // contents: rescale or clamp them into the new box, never reset them.
 mode.step(dt, env)     // advance by dt seconds, 0 < dt <= 1/30. Substep inside as needed.
-                       // env = { g:{x,y,z}, shake, pointers:[{id,x,y,vx,vy}], time, dt, source }
+                       // env = { g:{x,y,z}, gSlow:{x,y,z}, shake, pointers:[{id,x,y,vx,vy}], time, dt, source }
                        // pointers: fingers (or the mouse while pressed) in sim px and sim px/s
 mode.render(view)      // draw the whole frame. The canvas backing size is view.pxW × view.pxH.
 mode.stats()           // cheap: { count, nan, outside, ...mode-specific numbers }

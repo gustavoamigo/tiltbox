@@ -56,7 +56,7 @@ export class Motion {
 
     this.override = null;
     this.pulses = [];
-    this.lp = { x: 0, y: G, z: 0 }; // slow low-pass of g, to measure shake against
+    this.lp = { x: 0, y: G, z: 0 }; // g low-passed over 0.35 s: the tilt without the shake (env.gSlow)
 
     this.tilt = 0; // desktop: radians, + = right edge down
     this.tiltHome = false;
