@@ -5,9 +5,11 @@
 // rotates the picture back, so the contents stay put against the glass instead of jumping.
 
 export function screenAngle() {
+  // window.orientation first: it means the same in every WebKit and in Chrome, while iOS 16.4
+  // shipped screen.orientation.angle with the two landscape angles swapped (WebKit bug 254863).
   let a = 0;
-  if (screen.orientation && typeof screen.orientation.angle === 'number') a = screen.orientation.angle;
-  else if (typeof window.orientation === 'number') a = window.orientation; // old iOS
+  if (typeof window.orientation === 'number') a = window.orientation;
+  else if (screen.orientation && typeof screen.orientation.angle === 'number') a = screen.orientation.angle;
   return (((Math.round(a / 90) * 90) % 360) + 360) % 360;
 }
 

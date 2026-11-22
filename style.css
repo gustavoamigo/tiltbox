@@ -88,7 +88,7 @@ button svg[fill="none"] .fill { fill: var(--ui-fg); }
   border: 1px solid var(--ui-line);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
-  max-width: calc(100vw - 20px);
+  max-width: calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right));
   box-sizing: border-box;
   transition: opacity 0.35s, transform 0.35s;
   pointer-events: auto;
@@ -100,9 +100,12 @@ button svg[fill="none"] .fill { fill: var(--ui-fg); }
 }
 #bar:not(.shown) button { pointer-events: none; }
 #modes, #tools { display: flex; gap: 4px; }
+#modes { min-width: 0; flex: 0 1 auto; }
 #tools { padding-left: 6px; border-left: 1px solid var(--ui-line); }
 
 .mode {
+  flex: 0 1 auto;
+  min-width: 0;
   width: 54px;
   padding: 6px 0 4px;
   border-radius: 16px;
@@ -115,6 +118,7 @@ button svg[fill="none"] .fill { fill: var(--ui-fg); }
   opacity: 0.72;
 }
 .mode svg { width: 26px; height: 26px; stroke: none; }
+.mode span { max-width: 100%; overflow: hidden; white-space: nowrap; }
 .mode.on { background: rgba(255, 255, 255, 0.14); opacity: 1; }
 .mode.on span { color: var(--accent); }
 .tool {
@@ -134,6 +138,12 @@ button svg[fill="none"] .fill { fill: var(--ui-fg); }
   .mode { width: 44px; font-size: 9.5px; }
   .mode svg { width: 24px; height: 24px; }
   .tool { width: 34px; }
+}
+@media (max-width: 400px) {
+  #bar { gap: 4px; padding: 4px; }
+  #tools { padding-left: 4px; }
+  .tool { width: 32px; }
+  .mode { font-size: 9px; }
 }
 
 #toast {

@@ -68,9 +68,20 @@ function measureView() {
   return new View(w, h, angle, dpr);
 }
 
+// iOS delivers a rotation's new size and new angle in separate messages, so for a frame they can
+// disagree and the box would look turned sideways. Apply a change only once it has held for a
+// moment (at once under ?test, where tests turn the page on purpose).
+let pendingView = null;
+let pendingSince = 0;
 function checkView() {
   const v = measureView();
-  if (v.same(view)) return;
+  if (v.same(view)) { pendingView = null; return; }
+  if (!TEST) {
+    const now = performance.now();
+    if (!pendingView || !v.same(pendingView)) { pendingView = v; pendingSince = now; return; }
+    if (now - pendingSince < 120) return;
+  }
+  pendingView = null;
   view = v;
   canvas.width = v.pxW;
   canvas.height = v.pxH;
@@ -101,11 +112,24 @@ async function switchMode(id) {
     try { old.dispose(); } catch (e) { console.error(e); }
   }
   if (canvas) {
-    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+    const old = canvas;
+    canvas = null; // so its contextlost below is recognised as ours
+    const gl = old.getContext('webgl2') || old.getContext('webgl');
     if (gl) loseContext(gl);
-    canvas.remove();
+    old.remove();
   }
   canvas = document.createElement('canvas');
+  const c = canvas;
+  // iOS Safari can drop a WebGL context after backgrounding or a lock. Start the mode again on a
+  // fresh canvas rather than draw into a dead context.
+  c.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    if (c !== canvas) return;
+    ready = false;
+    const restart = () => { if (c === canvas) switchMode(modeId); };
+    if (document.visibilityState === 'visible') setTimeout(restart, 0);
+    else document.addEventListener('visibilitychange', restart, { once: true });
+  });
   stage.appendChild(canvas);
   view = measureView();
   canvas.width = view.pxW;
@@ -122,7 +146,7 @@ async function switchMode(id) {
     mode = m;
     mode.resize(view);
     modeStart = performance.now();
-    perfWin.frames = 0; perfWin.cpu = 0; perfWin.t0 = 0; perfWin.done = qualityFixed;
+    perfWin.frames = 0; perfWin.cpu = 0; perfWin.t0 = 0; perfWin.prev = 0; perfWin.done = qualityFixed;
     ready = true;
     if (!paused) mode.render(view);
   } catch (e) {
@@ -145,6 +169,7 @@ function haptic(strength = 0.5) {
 const pointers = new Map();
 let testPointers = null;
 const env = { g: motion.g, shake: 0, pointers: [], time: 0, dt: 0, source: 'desktop' };
+const screenG = { x: 0, y: 0, z: 0 };
 
 function stagePos(e) {
   const r = stage.getBoundingClientRect();
@@ -191,11 +216,17 @@ function pointerList(dt) {
 // ---------------------------------------------------------------- frame loop
 
 const perf = { step: 0, render: 0, fps: 0, n: 0, t0: 0 };
-const perfWin = { frames: 0, cpu: 0, t0: 0, done: false };
+const perfWin = { frames: 0, cpu: 0, t0: 0, prev: 0, done: false };
 
 function tick(dt) {
   motion.update(dt);
   env.g = motion.g;
+  if (motion.source === 'desktop' && view.angle) {
+    // No sensor (desktop keys, http, refused, none): 'down' is the screen's down, whatever the angle.
+    const r = view.vecToSim(motion.g.x, motion.g.y);
+    screenG.x = r.x; screenG.y = r.y; screenG.z = motion.g.z;
+    env.g = screenG;
+  }
   env.shake = motion.shake;
   env.dt = dt;
   env.time += dt;
@@ -206,12 +237,17 @@ function tick(dt) {
   return performance.now() - t0;
 }
 
-let last = performance.now();
+// rAF's timestamp is the frame's start, which can be earlier than a performance.now() read in an
+// event handler; so after a pause the clock is resynced from the next frame, never from an event.
+let last = 0;
+let resync = true;
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(Math.max((now - last) / 1000, 0), 1 / 30); // a hiccup is slow motion, never a blow-up
+  if (resync) { last = now; resync = false; return; }
+  const raw = (now - last) / 1000;
   last = now;
-  if (!mode || !ready || paused) return;
+  if (!mode || !ready || paused || !(raw > 0)) return;
+  const dt = Math.min(raw, 1 / 30); // a hiccup is slow motion, never a blow-up
   try {
     checkView();
     const stepMs = tick(dt);
@@ -233,14 +269,18 @@ requestAnimationFrame(frame);
 // One look per mode start: if this device can't keep up, drop a level and start again.
 function autoQuality(now, cpuMs) {
   if (perfWin.done || !started || now - modeStart < 2000) return;
+  const gap = perfWin.prev ? now - perfWin.prev : 0;
+  perfWin.prev = now;
+  if (gap > 100) { perfWin.frames = 0; perfWin.cpu = 0; perfWin.t0 = 0; return; } // a stall says nothing about speed
   if (!perfWin.t0) perfWin.t0 = now;
   perfWin.frames++;
   perfWin.cpu += cpuMs;
   if (perfWin.frames < 120) return;
   perfWin.done = true;
   const cpu = perfWin.cpu / perfWin.frames;
-  const frameMs = (now - perfWin.t0) / perfWin.frames;
-  const slow = cpu > 11 || (frameMs > 25 && cpu > 6);
+  const frameMs = (now - perfWin.t0) / (perfWin.frames - 1);
+  // iOS caps rAF at 30 fps in Low Power Mode and when hot; only slower than that counts.
+  const slow = cpu > 11 || (frameMs > 40 && cpu > 6);
   const i = QUALITIES.indexOf(quality);
   if (slow && i > 0) {
     quality = QUALITIES[i - 1];
@@ -280,7 +320,7 @@ $('btn-menu').addEventListener('click', () => {
 });
 $('btn-reset').addEventListener('click', () => {
   pokeUI();
-  if (mode && mode.reset) guard(() => mode.reset()); else switchMode(modeId);
+  if (mode && ready && mode.reset) guard(() => mode.reset()); else switchMode(modeId);
 });
 btnSound.addEventListener('click', () => {
   pokeUI();
@@ -319,7 +359,9 @@ $('btn-start').addEventListener('click', () => {
   pokeUI();
   keepAwake();
   perm.then((r) => {
-    if (r === 'denied') { toast('Motion access was refused. Touch still works; reload the page to be asked again.', 6000); return; }
+    if (isTouch && !window.isSecureContext) { toast('Tilt needs the https:// address. Drag to stir.', 6000); return; }
+    // iOS remembers a refusal per site until the browser is closed; a reload does not ask again.
+    if (r === 'denied') { toast('Motion access is off for this page. To be asked again, close the browser completely and reopen the page. Drag to stir.', 8000); return; }
     setTimeout(() => {
       if (motion.sensorActive()) return;
       if (isTouch) toast(window.isSecureContext ? 'No motion sensor here. Drag to stir.' : 'Tilt needs the https:// address. Drag to stir.', 6000);
@@ -329,8 +371,9 @@ $('btn-start').addEventListener('click', () => {
 });
 
 document.addEventListener('visibilitychange', () => {
+  perfWin.prev = 0;
   if (document.visibilityState === 'visible') {
-    last = performance.now();
+    resync = true;
     if (started) keepAwake();
     if (audio.resume) audio.resume();
   } else if (audio.suspend) audio.suspend();
@@ -373,10 +416,18 @@ window.__T = {
   audio,
   setMode: (id) => switchMode(id),
   setQuality(q) { if (!QUALITIES.includes(q)) throw new Error(`quality ${q}`); quality = q; return switchMode(modeId); },
-  rotate(angle) { forcedAngle = angle; if (mode) checkView(); },
-  pause(on = true) { paused = on; last = performance.now(); },
+  // Pretend the page is turned. Turn the viewport too (width <-> height), as a phone does.
+  rotate(angle) {
+    forcedAngle = angle;
+    if (angle != null && (angle % 180 !== 0) !== (stage.clientWidth > stage.clientHeight)) {
+      console.warn('__T.rotate: turn the viewport with the angle, or the box changes shape');
+    }
+    if (mode) checkView();
+  },
+  pause(on = true) { paused = on; resync = true; },
   // Deterministic stepping: n steps of dt, then one render. Use with pause().
   step(n = 1, dt = 1 / 60) {
+    if (!(dt > 0 && dt <= 1 / 30)) throw new Error(`dt must be in (0, 1/30], got ${dt}`);
     if (!mode || !ready) return null;
     try {
       checkView();

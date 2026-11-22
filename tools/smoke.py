@@ -59,7 +59,12 @@ def main():
     port = free_port()
     srv = subprocess.Popen([sys.executable, str(ROOT / "tools" / "serve.py"), str(port)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(0.5)
+    for _ in range(100):  # wait for the server to listen
+        try:
+            socket.create_connection(("127.0.0.1", port), 0.2).close()
+            break
+        except OSError:
+            time.sleep(0.1)
     failures = []
     try:
         with sync_playwright() as p:
@@ -76,8 +81,13 @@ def main():
                 cdp = ctx.new_cdp_session(page)
                 cdp.send("Emulation.setCPUThrottlingRate", {"rate": args.throttle})
             for m in modes:
-                page.evaluate("(m) => __T.setMode(m)", m)
-                page.wait_for_function("__T.ready || __T.error", timeout=20000)
+                page.evaluate("(m) => { __T.setMode(m); }", m)  # don't await create(): a hung mode must not hang the run
+                try:
+                    page.wait_for_function("(m) => (__T.ready && __T.mode === m) || __T.error", arg=m, timeout=20000)
+                except Exception:
+                    failures.append(f"{m}: did not start within 20 s")
+                    print(f"{m}: TIMEOUT")
+                    continue
                 err = page.evaluate("__T.error")
                 if err:
                     failures.append(f"{m}: failed to start: {err}")
@@ -98,7 +108,14 @@ def main():
                         elif kind == "unstir":
                             page.evaluate("__T.pointer(null)")
                         elif kind == "rotate":
+                            # A phone turning swaps the viewport and the angle together; the sim box
+                            # (the device's own frame) must not change shape.
+                            w, h = (args.height, args.width) if val % 180 else (args.width, args.height)
+                            page.set_viewport_size({"width": w, "height": h})
                             page.evaluate("(a) => __T.rotate(a)", val)
+                            sim = page.evaluate("[__T.view.simW, __T.view.simH]")
+                            if sim != [args.width, args.height]:
+                                failures.append(f"{m}/rotate {val}: sim box changed to {sim}")
                     t0 = time.time()
                     s = None
                     done = 0
@@ -126,6 +143,7 @@ def main():
                     print(f"  {name:15s} {flag:4s} {wall:6.2f} ms/frame wall  {summary}")
                     if bad:
                         failures.append(f"{m}/{name}: {'; '.join(bad)}")
+                page.set_viewport_size({"width": args.width, "height": args.height})
                 page.evaluate("__T.rotate(null)")
                 page.evaluate("__T.pointer(null)")
                 page.evaluate("__T.gravity(null)")
