@@ -88,7 +88,8 @@ export const HONEY = {
   visc: 1500, // nu / h² on the high grid, 1/s: implicit viscosity a = visc * dt per substep
   viscIters: 10,
   viscRounds: 3,
-  wallSlip: 1, // the grid's no-slip walls already hold honey back; more and a coat never drains
+  wallSlip: 0.6, // walls grip honey sliding along them; no-slip (0) and a coat never drains
+  seedWave: 0.003, // m/s per 60 Hz frame: the unevenness a hanging layer drips from
   damp: 0.5,
   flatDamp: 12,
   cfl: 2.5,

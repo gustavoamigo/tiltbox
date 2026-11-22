@@ -135,6 +135,11 @@ export async function createLiquidMode(ctx, preset) {
     const pushTotal = q.push || 2; // push-apart iterations a frame, spread over the substeps
     sim.params.pressureIters = Math.max(16, Math.ceil(q.pressureIters / substeps));
     sim.beginFrame();
+    if (preset.seedWave && gin > 2) {
+      // honey: the faint unevenness a hanging layer drips from (see FlipSim.nudge)
+      const L = Math.abs(g.x) > Math.abs(g.y) ? H : W; // the box across gravity
+      sim.nudge(g.x / gin, g.y / gin, preset.seedWave * pxPerM * dt * 60, (3 * Math.PI) / L, time * 0.7);
+    }
     for (let s = 0; s < substeps; s++) {
       placeFingers((s + 1) / substeps);
       sim.params.pushIters = Math.floor((pushTotal * (s + 1)) / substeps) - Math.floor((pushTotal * s) / substeps);
@@ -175,6 +180,7 @@ export async function createLiquidMode(ctx, preset) {
 
   // Field value inside resting liquid: the splat kernel summed over a hexagonal packing.
   const bulk = (Math.PI * (2 * preset.splat) ** 2) / (8 * Math.sqrt(3));
+  const frame = { sim, obstacles, up, light, bulk, loneWeight: preset.loneWeight }; // reused
 
   function render(view) {
     // A finger under the liquid is on the front glass, not in it: draw the liquid over its hole.
@@ -182,20 +188,13 @@ export async function createLiquidMode(ctx, preset) {
       const f = sim.liquidAround(o.x, o.y, o.r + 1.5 * Math.max(sim.hx, sim.hy));
       o.fill = Math.min(1, Math.max(0, (f - 0.55) / 0.35));
     }
-    renderer.render(view, {
-      sim,
-      splatR: preset.splat * 2 * sim.r,
-      thresh: preset.thresh * bulk,
-      bulk,
-      loneWeight: preset.loneWeight,
-      obstacles,
-      speedRef: preset.speedRef * pxPerM,
-      up,
-      light,
-      time,
-      causticT,
-      wobble,
-    });
+    frame.splatR = preset.splat * 2 * sim.r;
+    frame.thresh = preset.thresh * bulk;
+    frame.speedRef = preset.speedRef * pxPerM;
+    frame.time = time;
+    frame.causticT = causticT;
+    frame.wobble = wobble;
+    renderer.render(view, frame);
   }
 
   function stats() {

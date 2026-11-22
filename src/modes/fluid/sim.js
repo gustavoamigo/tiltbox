@@ -5,7 +5,7 @@
 // velocities splatted onto a staggered grid; the grid is made divergence-free with over-relaxed
 // Gauss-Seidel, and the change is read back to the particles as a PIC/FLIP blend. A density term
 // in the pressure solve expands over-full cells, which keeps the volume over long runs.
-// Viscous liquids (honey) add implicit viscosity on the grid, no-slip at the walls, solved with
+// Viscous liquids (honey) add implicit viscosity on the grid, gripped by the walls, solved with
 // over-relaxed Gauss-Seidel too.
 //
 // Units: positions in sim px (the box is [0, W] x [0, H], y down), velocities px/s,
@@ -64,7 +64,7 @@ export class FlipSim {
       viscIters: 0,
       viscOmega: 1.6,
       viscRounds: 1, // viscosity-then-pressure rounds per substep
-      wallSlip: 1, // 1: walls are slippery for the particles; < 1 drags along them (honey)
+      wallSlip: 1, // 1: free-slip walls; 0: no-slip (see _wallSlip)
       vmax: 1e4, // px/s cap: a guard, never reached in normal play
     };
     this.obstacles = []; // [{x, y, r, vx, vy, foam}] in sim px, px/s; foam it leaves 0..1
@@ -216,7 +216,7 @@ export class FlipSim {
     const P = this.params;
     const prof = this.prof;
     let t = prof ? performance.now() : 0;
-    const lap = (k) => { const t1 = performance.now(); prof[k] = (prof[k] || 0) + t1 - t; t = t1; };
+    const lap = prof ? (k) => { const t1 = performance.now(); prof[k] = (prof[k] || 0) + t1 - t; t = t1; } : null;
     this._advect(dt, damp);
     if (prof) lap('advect');
     if (P.pushIters > 0) this._pushApart(P.pushIters);
@@ -230,7 +230,10 @@ export class FlipSim {
     // Viscosity acts on the liquid's own motion before gravity is added: gravity's uniform
     // increment has no shear, and diffused against no-slip walls it would let the walls hold
     // the liquid up by friction, which the pressure then turns into a creep up the walls.
-    if (visc) this._viscosity(P.visc * dt, P.viscIters, P.viscOmega);
+    if (visc) {
+      this._wallSlip(P.wallSlip);
+      this._viscosity(P.visc * dt, P.viscIters, P.viscOmega);
+    }
     if (prof) lap('visc');
     this._addGravity(dt, gx, gy);
     this._prepPressure(dt);
@@ -240,12 +243,16 @@ export class FlipSim {
     // substep before viscosity can resist the shear; a few more viscosity-then-pressure rounds
     // approach the coupled solve, and the blob lands like honey instead of splashing flat.
     for (let r = 1; visc && r < P.viscRounds; r++) {
+      this._wallSlip(P.wallSlip);
       this._viscosity(P.visc * dt, P.viscIters, P.viscOmega);
       if (prof) lap('visc');
       this._solvePressure(P.pressureIters >> 1); // a correction: the first solve did the bulk
       if (prof) lap('pressure');
     }
-    this._g2p(P.flipRatio);
+    this._wallSlip(P.wallSlip);
+    // The FLIP share is per 1/60 s: a longer substep keeps less of the particles' own noise, so
+    // a phone running at 30 fps settles as calmly as one at 60.
+    this._g2p(dt > 1 / 60 ? P.flipRatio ** (dt * 60) : P.flipRatio);
     if (prof) lap('g2p');
   }
 
@@ -266,6 +273,19 @@ export class FlipSim {
       vx[i] = x; vy[i] = y;
       px[i] += x * dt;
       py[i] += y * dt;
+    }
+  }
+
+  // A faint long wave of velocity along (dx, dy) (unit), varying across it: amp px/s, k rad/px.
+  // Smooth PIC flow carries no noise of its own, so a layer hanging from the ceiling wall to
+  // wall is a perfect balance and never starts to drip; real honey always has some unevenness
+  // to grow from. Where the liquid is stable, gravity flattens the wave at once.
+  nudge(dx, dy, amp, k, phase) {
+    const { n, px, py, vx, vy } = this;
+    for (let i = 0; i < n; i++) {
+      const w = amp * Math.sin((px[i] * -dy + py[i] * dx) * k + phase);
+      vx[i] += w * dx;
+      vy[i] += w * dy;
     }
   }
 
@@ -353,7 +373,6 @@ export class FlipSim {
     const minX = r; const maxX = this.W - r;
     const minY = r; const maxY = this.H - r;
     const no = obstacles.length;
-    const slip = this.params.wallSlip;
     for (let i = 0; i < n; i++) {
       let x = px[i];
       let y = py[i];
@@ -370,11 +389,11 @@ export class FlipSim {
           if (foam[i] < o.foam) foam[i] = o.foam; // a fast finger drags air in behind it
         }
       }
-      // A wall stops the motion into it; slip < 1 also drags the motion along it.
-      if (!(x >= minX)) { x = minX; if (vx[i] < 0) vx[i] = 0; vy[i] *= slip; }
-      if (!(x <= maxX)) { x = maxX; if (vx[i] > 0) vx[i] = 0; vy[i] *= slip; }
-      if (!(y >= minY)) { y = minY; if (vy[i] < 0) vy[i] = 0; vx[i] *= slip; }
-      if (!(y <= maxY)) { y = maxY; if (vy[i] > 0) vy[i] = 0; vx[i] *= slip; }
+      // A wall stops the motion into it (the grip along it is on the grid: _wallSlip).
+      if (!(x >= minX)) { x = minX; if (vx[i] < 0) vx[i] = 0; }
+      if (!(x <= maxX)) { x = maxX; if (vx[i] > 0) vx[i] = 0; }
+      if (!(y >= minY)) { y = minY; if (vy[i] < 0) vy[i] = 0; }
+      if (!(y <= maxY)) { y = maxY; if (vy[i] > 0) vy[i] = 0; }
       px[i] = x; py[i] = y;
     }
   }
@@ -503,9 +522,28 @@ export class FlipSim {
         } else { v[c] = 0; vClass[c] = 2; vValid[c] = 0; }
       }
     }
-    // The particles' own velocities, for the FLIP update.
+    // The particles' own velocities, for the FLIP update; the wall faces as the walls see them,
+    // so a free-slip wall adds no FLIP change of its own.
     u0.set(u);
     v0.set(v);
+    this._wallSlip(this.params.wallSlip, u0, v0);
+  }
+
+  // The walls' grip on the liquid sliding along them. The faces in the ghost ring that run
+  // along a wall take slip times the velocity just inside: 1 is a free-slip wall, 0 no-slip.
+  // These faces are what viscosity and the particles near a wall see as the wall's velocity.
+  _wallSlip(slip, u = this.u, v = this.v) {
+    const { NX, NY } = this;
+    for (let j = 0; j < NY; j++) {
+      const l = j * NX;
+      v[l] = slip * v[l + 1];
+      v[l + NX - 1] = slip * v[l + NX - 2];
+    }
+    const b = (NY - 1) * NX;
+    for (let i = 0; i < NX; i++) {
+      u[i] = slip * u[i + NX];
+      u[b + i] = slip * u[b + i - NX];
+    }
   }
 
   // Gravity on every open face.
@@ -569,7 +607,8 @@ export class FlipSim {
     const ax = ihx * ihx;
     const ay = ihy * ihy;
     const rest = this.rest;
-    const k = this.params.drift;
+    // at most a fifth of the error per substep: more overshoots, and a long frame (30 fps) jitters
+    const k = Math.min(this.params.drift, 0.2 / dt);
     const omega = this.params.omega;
     const warm = this.presDt > 0 ? dt / this.presDt : 0; // pressure impulses scale with dt
     presNew.fill(0);
@@ -822,7 +861,8 @@ export class FlipSim {
   // Angle (degrees) between the free surface and the perpendicular to (gx, gy): the top of the
   // liquid, binned across the gravity direction, fitted with a line (twice, the second time
   // without bins far off the first line). Bins whose top particle has a wall just above it are
-  // not free surface and are left out. For tests and the debug overlay; not per frame.
+  // not free surface and are left out; null if too little free surface is left to fit. For tests
+  // and the debug overlay; not per frame.
   surfaceTilt(gx, gy) {
     const gl = Math.hypot(gx, gy);
     if (gl < 1e-6) return 0;
@@ -868,7 +908,7 @@ export class FlipSim {
         k++; S += s; T += t; SS += s * s; ST += s * t;
       }
       const den = k * SS - S * S;
-      if (k < 3 || Math.abs(den) < 1e-9) { if (pass === 0) return 0; break; }
+      if (k < 3 || Math.abs(den) < 1e-9) { if (pass === 0) return null; break; } // no free surface
       B = (k * ST - S * T) / den;
       A = (T - B * S) / k;
     }
