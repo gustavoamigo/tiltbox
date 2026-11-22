@@ -53,7 +53,8 @@ export async function createBallMode(ctx, preset) {
 
   return {
     resize(view) {
-      world.resize(view.simW, view.simH);
+      // the page turning or the pixel ratio changing leaves the box as it is
+      if (view.simW !== world.W || view.simH !== world.H) world.resize(view.simW, view.simH);
     },
     step(dt, env) {
       world.setFingers(env.pointers, dt);

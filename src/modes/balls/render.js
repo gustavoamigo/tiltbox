@@ -74,12 +74,12 @@ export class BallRenderer {
     const gl = this.gl;
     const w = Math.max(16, Math.round(view.simW * this.bgScale));
     const h = Math.max(16, Math.round(view.simH * this.bgScale));
+    // sim (x, y) -> clip of the target, unflipped: texel (u, v) holds sim point (u·simW, v·simH)
+    this.fbo[0] = 2 / view.simW; this.fbo[4] = 2 / view.simH; this.fbo[6] = -1; this.fbo[7] = -1;
     if (this.bg && w === this.bgW && h === this.bgH) return;
     if (this.bg) this.bg.dispose();
     this.bg = makeTarget(gl, w, h, { float: false });
     this.bgW = w; this.bgH = h;
-    // sim (x, y) -> clip of the target, unflipped: texel (u, v) holds sim point (u·simW, v·simH)
-    this.fbo.set([2 / view.simW, 0, 0, 0, 2 / view.simH, 0, -1, -1, 1]);
   }
 
   // world: BallWorld; L: unit vector toward the light, sim frame (z < 0: in front)

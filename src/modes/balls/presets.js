@@ -10,7 +10,8 @@ const BASE = {
   massExp: 3, // mass ∝ r^massExp (3: solid spheres)
   inertiaK: 0.4, // I = k m r² (0.4: solid sphere)
   substepHz: 960, // solver substeps per second (16 a frame at 60 fps)
-  maxSubsteps: 40, // per step: a long frame (dt 1/30) still runs at the full rate
+  maxSubsteps: 24, // per step: a long frame (dt 1/30) runs at 720 Hz, so a slow device that drops
+  // frames does not do twice the work per frame and drop more (worst overlap 12% vs 10%)
   maxInterval: 4, // most substeps between collision passes (when everything is slow)
   travel: 0.25, // fastest ball moves at most this fraction of the smallest radius between passes
   velIters: 2, // velocity Gauss-Seidel sweeps per substep
@@ -60,8 +61,8 @@ export const MARBLES = {
   wallFriction: 0.25,
   rollRes: 0.008, // rolling resistance arm, fraction of the radius, at in-plane contacts
   glassFriction: 0.3, // against the back glass, pressed by |g.z|
-  glassRollRes: 0.012, // flat phone: rolling resistance arm (fraction of r); marbles roll on below 0.7°,
-  // and one pushed at 1 m/s on a level phone rolls ~1 m before it stops
+  glassRollRes: 0.012, // flat phone: rolling resistance arm (fraction of r). A marble starts to roll
+  // above ~0.7° of tilt, and on a level phone slows by ~0.08 m/s²: from 0.3 m/s it coasts ~3.5 s
   glassSpin: 0.08,
   glassBase: 0.2, // m/s²: a little glass contact even upright (the box is not perfectly thin)
   soundMin: 0.06, // m/s approach speed: quieter than this is not heard
@@ -91,7 +92,7 @@ export const BALLS = {
   wallFriction: 0.8,
   rollRes: 0.03,
   glassFriction: 0.8,
-  glassRollRes: 0.04, // rubber on glass: needs 2.3° to roll, stops about 3x sooner than a marble
+  glassRollRes: 0.04, // rubber on glass: rolls above ~2.3°, slows by ~0.26 m/s² (3x a marble)
   glassSpin: 0.25,
   glassBase: 0.2,
   soundMin: 0.08,
