@@ -123,7 +123,7 @@ button svg[fill="none"] .fill { fill: var(--ui-fg); }
   #bar { gap: 4px; padding: 4px; }
   #tools { padding-left: 4px; }
   .tool { width: 32px; }
-  .mode { font-size: 9px; }
+  .mode { font-size: 8.6px; letter-spacing: 0; }
 }
 
 #toast {
