@@ -20,6 +20,14 @@
 // Rest is exact: a grain that cannot move falls asleep and costs nothing until a neighbour moves
 // or gravity turns. No creep, no jitter.
 //
+// Shaken, the sand has mass: while the box is shaken sideways (g leaves its slow average gSlow
+// across it by more than A_LOOSE, and |g| its own by more than A_MAG, which a mere tilt does not
+// do) the bed is loose. Grains near the surface then move ballistically even where they
+// are supported, share velocity with the grains they touch so the bed moves as a body, and a mass
+// driven against a wall shoves the line of grains in its way toward "up" into the nearest free
+// cell, so it heaps up the wall and slams back when the shake reverses. The shake across gSlow is
+// exaggerated K_SHAKE times (a hand shake moves a phone about a centimetre).
+//
 // Units: CSS px and seconds in the sim frame (x right, y down); velocities in px/s. Cells are
 // sx × sy px (about `cell`, fitted so the grid covers the box). The occupancy grid has a border of
 // wall cells PAD deep, so neighbour lookups need no bounds checks. DOM-free: runs in Node for tests.
@@ -49,6 +57,18 @@ export const P = {
   SUB_DT: 1 / 180, // s, longest substep
   SUB_DT_FEW: 1 / 480, // s, longest substep while fewer than FEW of the grains are awake
   FEW: 0.12,
+  SUB_DT_LOOSE: 1 / 120, // s, longest substep while the bed is loose (most of its surface layer is awake)
+  // Shaken sand (docs/modes/sand.md, "Shaking: the bed has mass")
+  K_SHAKE: 2, // the shake across gSlow is scaled by this: gSlow + K·(g - gSlow), sideways only
+  A_LOOSE: 4, // m/s²: a sideways shake (g - gSlow across gSlow) above this loosens the bed...
+  A_MAG: 2, // m/s²: ...if |g| also leaves its slow average by this much (a tilt turns g, a shake stretches it)
+  LOOSE_HOLD: 0.15, // s: the shake level decays over this, so a shake's zero crossings stay loose
+  VISC: 0.3, // part of the touching grains' mean velocity a loose grain takes per substep
+  V_PUSH: 300, // px/s: a jammed loose grain slower than this shoves nothing
+  PUSH_K: 12, // cells: a shoved line of k grains moves at v / (1 + k / PUSH_K): deep sand is heavy
+  PUSH_LINE: 40, // cells: the longest line a grain shoves
+  PUSH_DEPTH: 14, // cells: only sand this close under the surface moves with the shake; deeper sleeps
+  SCATTER_LOOSE: 0.02, // SCATTER while loose (dense sand slamming about sprays less than a falling grain)
 };
 export const V_MOVING = 30; // px/s: "moving", for stats and sound
 
@@ -65,6 +85,14 @@ const DX = [1, 1, 0, -1, -1, -1, 0, 1];
 const DY = [0, 1, 1, 1, 0, -1, -1, -1];
 const DL = [1, Math.SQRT1_2, 1, Math.SQRT1_2, 1, Math.SQRT1_2, 1, Math.SQRT1_2]; // 1 / length
 
+// The grid direction (0..7) nearest to (x, y).
+function octant(x, y) {
+  const ax = x < 0 ? -x : x, ay = y < 0 ? -y : y;
+  if (ay < 0.4142 * ax) return x > 0 ? 0 : 4;
+  if (ax < 0.4142 * ay) return y > 0 ? 2 : 6;
+  return x > 0 ? (y > 0 ? 1 : 7) : (y > 0 ? 3 : 5);
+}
+
 export class SandGrid {
   constructor(cap, cell) {
     this.cap = cap;
@@ -80,6 +108,7 @@ export class SandGrid {
     this.awake = new Uint8Array(cap);
     this.stamp = new Uint32Array(cap); // last substep the grain was updated
     this.held = new Uint32Array(cap); // last substep the grain was at rest (holds up others)
+    this.jam = new Uint32Array(cap); // last substep the grain was blocked and could not move
     this.tick = 0;
     this.W = 1; this.H = 1;
     this.gw = 0; this.gh = 0;
@@ -96,7 +125,14 @@ export class SandGrid {
     this.wakeG = { x: 0, y: 0, z: 0 }; // gravity when the surface last looked at its slopes
     this.hard = 0; // speed lost in collisions harder than V_SCATTER this step, summed, px/s (sound)
     this.moved = 0; // grains that changed cell this step
-    this.ctx = { h: 0, Gx: 0, Gy: 0, glass: 0, inPlane: false, ux: 0, uy: 1, cosS: 1, cosF: 1, sinS: 0, slideDv: 0 };
+    this.shakeLevel = 0; // m/s², peak-held |g - gSlow| in the plane (decays over LOOSE_HOLD)
+    this.magLevel = 0; // m/s², peak-held ||g| - its slow average|
+    this.magSlow = -1; // m/s², |g| low-passed like gSlow
+    this.pushV = 0; // speed of the line the last push shoved
+    this.ctx = {
+      h: 0, Gx: 0, Gy: 0, glass: 0, inPlane: false, ux: 0, uy: 1, cosS: 1, cosF: 1, sinS: 0, slideDv: 0,
+      loose: false, upx: 0, upy: -1, upStep: 0, // "up" along the slow gravity, and as a cell step
+    };
   }
 
   // Padded index of cell (x, y).
@@ -215,6 +251,14 @@ export class SandGrid {
     if (--this.colAwake[x] === 0) { this.colLo[x] = this.gh; this.colHi[x] = -1; }
   }
 
+  // Is there a free cell next to padded cell c?
+  hasFree(c) {
+    const { occ, stride } = this;
+    return occ[c - stride - 1] === EMPTY || occ[c - stride] === EMPTY || occ[c - stride + 1] === EMPTY ||
+      occ[c - 1] === EMPTY || occ[c + 1] === EMPTY ||
+      occ[c + stride - 1] === EMPTY || occ[c + stride] === EMPTY || occ[c + stride + 1] === EMPTY;
+  }
+
   // Wake every grain with a free cell next to it.
   wakeSurface() {
     const { n, occ, awake, cx, cy, stride } = this;
@@ -260,10 +304,13 @@ export class SandGrid {
     this.fingers = now;
   }
 
-  // g: effective gravity in m/s², sim frame (z toward the back glass).
+  // g: effective gravity in m/s², sim frame (z toward the back glass); gSlow: g low-passed (the
+  // tilt without the shake), or nothing for a grid that only follows g.
   // Substeps of at most SUB_DT; when only a few grains are awake (an avalanche, a trickle) of
-  // SUB_DT_FEW, since the pile rules move a grain one cell per substep and they are cheap then.
-  step(dt, g) {
+  // SUB_DT_FEW, since the pile rules move a grain one cell per substep and they are cheap then;
+  // while the bed is loose of SUB_DT_LOOSE, since thousands of grains are awake then.
+  step(dt, gIn, gSlow) {
+    const g = this.shaken(dt, gIn, gSlow);
     this.hard = 0;
     this.moved = 0;
     if (!this.n || !(dt > 0)) return;
@@ -280,11 +327,56 @@ export class SandGrid {
     let t = 0;
     for (let k = 0; k < 64 && t < dt - 1e-9; k++) {
       const few = this.nAwake < P.FEW * this.n;
-      const nLeft = Math.ceil((dt - t) / (few ? P.SUB_DT_FEW : P.SUB_DT) - 1e-6);
+      const sub = this.ctx.loose ? P.SUB_DT_LOOSE : few ? P.SUB_DT_FEW : P.SUB_DT;
+      const nLeft = Math.ceil((dt - t) / sub - 1e-6);
       const h = (dt - t) / nLeft;
       t += h;
       this.substep(h, g, t / dt);
     }
+  }
+
+  // The gravity the sand feels, and whether the bed is loose. While it is, the shake across the
+  // slow gravity is exaggerated K_SHAKE times (along it, a true-scale shake already makes the bed
+  // jump), and a bed that has just turned loose wakes whole (the deep part falls asleep again in
+  // its first substep).
+  shaken(dt, g, gSlow) {
+    const ctx = this.ctx;
+    // "Down" for the shake is the slow gravity. The bed can only be loose where that gravity
+    // beats the back glass: a heap shoved up a wall must be able to run back down. Lying flat
+    // (or nearly), the glass would hold the shoved sand in mid-box, so the bed stays as it was.
+    let ux = 0, uy = 0, dx = 0, dy = 0, canHeap = false;
+    if (gSlow) {
+      dx = g.x - gSlow.x; dy = g.y - gSlow.y;
+      const sl = Math.sqrt(gSlow.x * gSlow.x + gSlow.y * gSlow.y);
+      canHeap = sl > 0.5 && sl > P.MU_GLASS * Math.abs(gSlow.z);
+      if (canHeap) { ux = gSlow.x / sl; uy = gSlow.y / sl; }
+    }
+    const along = dx * ux + dy * uy, tx = dx - along * ux, ty = dy - along * uy;
+    // How hard the box is shaken sideways: g away from its slow average across it, and |g| away
+    // from its own slow average. Turning the box (a tilt) moves only the first, and an up-and-down
+    // shake only the second (the bed then just jumps, which needs nothing loose): only a sideways
+    // shake loosens the bed.
+    const mag = Math.sqrt(g.x * g.x + g.y * g.y + g.z * g.z);
+    if (this.magSlow < 0) this.magSlow = mag;
+    this.magSlow += (mag - this.magSlow) * (1 - Math.exp(-dt / 0.35));
+    const fade = Math.exp(-dt / P.LOOSE_HOLD);
+    this.shakeLevel = Math.max(Math.sqrt(tx * tx + ty * ty), this.shakeLevel * fade);
+    this.magLevel = Math.max(Math.abs(mag - this.magSlow), this.magLevel * fade);
+    const loose = canHeap && this.shakeLevel > P.A_LOOSE && this.magLevel > P.A_MAG;
+    if (loose && !ctx.loose) for (let i = 0; i < this.n; i++) this.wake(i);
+    ctx.loose = loose;
+    // While loose, the sideways shake is exaggerated, and "up" (against the slow gravity) is
+    // where shoved sand goes.
+    const k = loose ? P.K_SHAKE - 1 : 0;
+    const gx = g.x + k * tx, gy = g.y + k * ty, gz = g.z;
+    if (loose) {
+      ctx.upx = -ux; ctx.upy = -uy;
+      const a = octant(-ux, -uy);
+      ctx.upStep = DY[a] * this.stride + DX[a];
+    }
+    const m = Math.sqrt(gx * gx + gy * gy + gz * gz);
+    const s = m > 60 ? 60 / m : 1; // the exaggerated shake stays bounded (|g| is clamped to 45)
+    return { x: gx * s, y: gy * s, z: gz * s };
   }
 
   // u: how far through the frame this substep ends (0..1], for sweeping the fingers.
@@ -348,9 +440,17 @@ export class SandGrid {
     const below = occ[c0 + DY[d] * stride + DX[d]];
     const supported = below === WALL || (below >= 0 && (!this.awake[below] || this.held[below] === this.tick));
     if (supported && vxi * vxi + vyi * vyi < P.V_SLIDE * P.V_SLIDE) {
-      this.held[i] = this.tick;
-      this.rest(i, c0, ctx, d);
-      return;
+      if (!ctx.loose || this.hasFree(c0)) {
+        this.held[i] = this.tick;
+        this.rest(i, c0, ctx, d);
+        return;
+      }
+      // Inside a loose bed. Deep down, the weight above holds it: it sleeps (and so holds up the
+      // grains above it). Within PUSH_DEPTH of the surface it moves with the shaken bed (below).
+      const su = ctx.upStep;
+      let s = c0 + su, k = 0;
+      while (k < P.PUSH_DEPTH + 2 && occ[s] >= 0) { s += su; k++; }
+      if (occ[s] !== EMPTY) { this.held[i] = this.tick; this.sleep(i); return; }
     }
 
     // Falling or flying. A grain that was at rest wakes the grains resting on it (the cells
@@ -366,6 +466,15 @@ export class SandGrid {
       if (j >= 0 && !this.awake[j]) this.wake(j);
     }
     const h = ctx.h;
+    if (ctx.loose) {
+      // Dense sand moves as a body: the grain takes part of the mean velocity of those touching it.
+      let sx = 0, sy = 0, m = 0;
+      for (let e = 0; e < 8; e++) {
+        const j = occ[c0 + DY[e] * stride + DX[e]];
+        if (j >= 0) { sx += vx[j]; sy += vy[j]; m++; }
+      }
+      if (m) { const k = (P.VISC * m) / 8 / m; vxi += (sx - vxi * m) * k; vyi += (sy - vyi * m) * k; }
+    }
     vxi += ctx.Gx * h; vyi += ctx.Gy * h;
     let s2 = vxi * vxi + vyi * vyi;
     const glass = ctx.glass;
@@ -392,7 +501,20 @@ export class SandGrid {
         if (occ[c + sy] === EMPTY) { c += sy; oyi -= my; continue; }
         if (!xFirst && occ[c + mx] === EMPTY) { c += mx; oxi -= mx; continue; }
       }
+      // Blocked. In a loose bed a mass jammed against a wall shoves the grains in its way aside
+      // (push); the grain shares its momentum along the shove with the line it moved.
+      if (ctx.loose) {
+        const e = this.push(c, vxi, vyi, ctx);
+        if (e >= 0) {
+          c += DY[e] * stride + DX[e]; oxi -= DX[e]; oyi -= DY[e];
+          const ex = DX[e] * DL[e], ey = DY[e] * DL[e];
+          const dv = vxi * ex + vyi * ey - this.pushV;
+          vxi -= dv * ex; vyi -= dv * ey;
+          break;
+        }
+      }
       // Blocked: an inelastic collision along each blocked axis.
+      if (c === c0) this.jam[i] = this.tick;
       if (mx !== 0) {
         const j = occ[c + mx];
         const ujx = j >= 0 ? vx[j] : 0, ujy = j >= 0 ? vy[j] : 0;
@@ -422,12 +544,16 @@ export class SandGrid {
         }
       }
     }
+    // Travel a shove ended (or that the 16 cells did not cover) is spent: the grain is drawn
+    // within its cell (a leftover offset would draw it cells away, even outside the box).
+    if (oxi > 0.49) oxi = 0.49; else if (oxi < -0.49) oxi = -0.49;
+    if (oyi > 0.49) oyi = 0.49; else if (oyi < -0.49) oyi = -0.49;
     if (c !== c0) this.move(i, c0, c, false);
     if (lost > 0) {
       // a hard hit scatters the grain a little, so a slab of sand thrown about breaks into spray
       if (lost > P.V_SCATTER) {
         this.hard += lost;
-        const k = P.SCATTER * (lost - P.V_SCATTER);
+        const k = (ctx.loose ? P.SCATTER_LOOSE : P.SCATTER) * (lost - P.V_SCATTER);
         vxi += (rnd() - 0.5) * k; vyi += (rnd() - 0.5) * k;
       }
     }
@@ -483,6 +609,59 @@ export class SandGrid {
     vx[i] = 0; vy[i] = 0;
     if (act[i] > 0) act[i]--;
     else this.sleep(i);
+  }
+
+  // A grain in padded cell c, moving at (vx, vy), blocked, in a loose bed. If what blocks it is a
+  // wall, or grains that are themselves jammed (not a falling block waiting for the grains ahead to
+  // move on), it shoves a line of grains, turned from its motion toward "up", one cell into the
+  // nearest free cell, and moves into the first cell. A line of k grains takes a share of its speed
+  // (v / (1 + k / PUSH_K)), and the shove happens with the chance that this speed carries the
+  // line a cell in this substep, so long lines (deep sand) move slowly. Only sand within
+  // PUSH_DEPTH of the surface shoves. Returns the direction moved (this.pushV the line's speed)
+  // or -1.
+  push(c, vxi, vyi, ctx) {
+    const { occ, stride, stamp, vx, vy } = this;
+    const sp = Math.sqrt(vxi * vxi + vyi * vyi);
+    if (sp < P.V_PUSH) return -1;
+    const fx = vxi / sp, fy = vyi / sp;
+    const a = octant(fx, fy);
+    const ahead = occ[c + DY[a] * stride + DX[a]];
+    if (ahead === EMPTY || (ahead >= 0 && this.awake[ahead] && this.jam[ahead] !== this.tick)) return -1;
+    // Draw the chance first: it bounds how long a line is worth looking along.
+    const r = rnd(), reach = (sp * ctx.h) / this.sx / r; // cells the shove could carry one grain
+    if (reach < 1) return -1;
+    const kMax = Math.min(P.PUSH_LINE, Math.floor(P.PUSH_K * (reach - 1)) + 1);
+    let best = -1, bestCost = 1e9, bestK = 0, bestV = 0;
+    for (let e = 0; e < 8; e++) {
+      if (e === a) continue;
+      const ex = DX[e] * DL[e], ey = DY[e] * DL[e];
+      const fwd = ex * fx + ey * fy;
+      if (fwd < 0.3 || ex * ctx.upx + ey * ctx.upy < -0.2) continue; // onward, never down
+      const step = DY[e] * stride + DX[e];
+      let k = 1;
+      while (k <= kMax && occ[c + k * step] >= 0) k++;
+      if (k > kMax || occ[c + k * step] !== EMPTY) continue;
+      if ((((sp * fwd) / (1 + (k - 1) / P.PUSH_K)) * ctx.h) / this.sx < r) continue;
+      const cost = k / fwd;
+      if (cost < bestCost) { bestCost = cost; best = e; bestK = k - 1; bestV = sp * fwd; }
+    }
+    if (best < 0) return -1;
+    const su = ctx.upStep;
+    let s = c + su;
+    for (let k = 0; k < P.PUSH_DEPTH && occ[s] >= 0; k++) s += su;
+    if (occ[s] !== EMPTY) return -1; // deep: the weight above holds it
+    const vLine = bestV / (1 + bestK / P.PUSH_K);
+    const step = DY[best] * stride + DX[best];
+    const ex = DX[best] * DL[best], ey = DY[best] * DL[best];
+    for (let j = bestK; j >= 1; j--) {
+      const from = c + j * step, g = occ[from];
+      this.shift(g, from, from + step);
+      stamp[g] = this.tick; // moved this substep
+      const ve = vx[g] * ex + vy[g] * ey;
+      if (ve < vLine) { vx[g] += (vLine - ve) * ex; vy[g] += (vLine - ve) * ey; }
+    }
+    this.pushV = vLine;
+    return best;
   }
 
   // The surface slope at padded cell cs: if steeper than acos(cosMax) against gravity (ux, uy),

@@ -1,5 +1,5 @@
-// The Sand mode: the grid sand engine (grid.js) driven by env.g and fingers, drawn by render.js,
-// with a sand bed, grain ticks on hard hits and haptics on slams.
+// The Sand mode: the grid sand engine (grid.js) driven by env.g, env.gSlow (shakes) and fingers,
+// drawn by render.js, with a sand bed, grain ticks on hard hits and haptics on slams.
 
 import { createGL } from '../../gl.js';
 import { SandGrid, PX_PER_M, V_MOVING } from './grid.js';
@@ -83,7 +83,7 @@ export default async function create(ctx) {
     step(dt, env) {
       lastG = env.g;
       grid.setFingers(env.pointers);
-      grid.step(dt, env.g);
+      grid.step(dt, env.g, env.gSlow);
       if (grid.moved || grid.nAwake) renderer.dirty = true; // several steps may come before a render
       soundAndTouch(dt);
     },
@@ -109,6 +109,7 @@ export default async function create(ctx) {
         reposeAngle: grid.reposeAngle(lastG),
         kinetic: n ? (0.5 * ke) / n / (PX_PER_M * PX_PER_M) : 0, // mean J/kg
         awake: grid.nAwake,
+        loose: grid.ctx.loose, // the bed is being shaken loose
         cell: +grid.sx.toFixed(3),
       };
     },
@@ -117,7 +118,10 @@ export default async function create(ctx) {
       const { n } = grid;
       const x = new Float32Array(n), y = new Float32Array(n);
       for (let i = 0; i < n; i++) { x[i] = grid.posX(i); y[i] = grid.posY(i); }
-      return { n, x, y, gw: grid.gw, gh: grid.gh };
+      return {
+        n, x, y, gw: grid.gw, gh: grid.gh, sx: grid.sx, sy: grid.sy,
+        cx: grid.cx.slice(0, n), cy: grid.cy.slice(0, n), vx: grid.vx.slice(0, n), vy: grid.vy.slice(0, n),
+      };
     },
 
     reset() {

@@ -28,7 +28,7 @@ Sim px and seconds; velocities in px/s; gravity arrives in m/s² and is scaled b
 
 ## A step
 
-Substeps are at most 1/180 s. While fewer than 12% of the grains are awake (an avalanche, a trickle) they are 1/480 s, because the pile rules move a grain one cell per substep and are cheap when few grains run them.
+Substeps are at most 1/180 s. While fewer than 12% of the grains are awake (an avalanche, a trickle) they are 1/480 s, because the pile rules move a grain one cell per substep and are cheap when few grains run them. While the bed is shaken loose (below) they are 1/120 s, because thousands of grains are awake then.
 
 Each substep visits the cells from the leading edge along gravity (rows or columns, whichever axis gravity is nearer, and from the side gravity leans to). Only awake grains are visited, and only lines with awake grains, within the span they occupy. "Below" for a grain is one of the eight grid directions: one of the two nearest to gravity, picked per grain and substep in proportion to the angle between them.
 
@@ -42,11 +42,27 @@ A grain is **supported** if the cell below is a wall, or a grain that is asleep 
 3. otherwise the surface normal is the sum of the offsets of the free cells in a disc of radius 3. If the slope is steeper than `REPOSE`, or than `REPOSE_FLOW` while the grain is already sliding, the grain moves to the free neighbour most nearly downhill along it. It gains about half of g along the slide per substep, so a long slope turns into a fast surface flow. A grain sliding past wakes those within 2 cells and makes them count as sliding for `STIR` substeps: the flowing layer drags the one under it down to the flow angle;
 4. nothing to do: after `ACTIVE` substeps without moving it falls asleep (velocity and sub-cell offset cleared).
 
-Gravity turning more than 1.5°, or the back glass starting or stopping to hold the sand, wakes every grain with a free neighbour so the surface looks at its slopes again. On a flat phone (`MU_GLASS·|g.z|` above the in-plane gravity) nothing moves at all.
+Gravity turning more than 1.5°, or the back glass starting or stopping to hold the sand, wakes every grain with a free neighbour so the surface looks at its slopes again. On a flat phone (`MU_GLASS·|g.z|` above the in-plane gravity) nothing moves at all, unless it is shaken sideways harder than the glass holds; the bed then slides as a block (it never turns loose, see "Shaking").
 
 **Fingers** are 24 px discs swept from last frame's position to this one across the substeps. Each grain under one is shoved out along a line of cells: the most nearly outward direction, leaning "up", that reaches a free cell within 90 cells. The whole line shifts one cell into it. Deep in the pile the sand above the finger rises; near the surface the finger digs a trench that slumps back behind it. The grains nearest the finger take half its speed, so a flick throws sand.
 
 **Resize**: if the grid size changes, the sand is stacked afresh against the wall gravity points at. Each line across that wall keeps about its grains, in their old order, so the heap's profile and the colour layers survive.
+
+## Shaking: the bed has mass
+
+The owner's complaint (2026-11): "it doesn't have any mass … when you shake the phone, it doesn't have that inertia effect". Measured before the change, a 20 m/s² 5 Hz sideways shake moved 1.3% of the grains on average, swung the centre of mass by 0.3% of the box width and piled 8 px against a wall; a 25 m/s² 0.2 s flick moved the mass 0.8% of the width and everything was asleep 0.23 s after it began. Two causes. The pile rules see only the direction of g: a supported grain that is not already flying stays put or slides one cell, so the sideways part of a shake (which is what the hand gives) reached only the top grain or two. And a full-width bed has nowhere to go sideways: real sand under a sideways shake stronger than its friction is driven against the wall and heaps up it, which needs the grains against the wall to be pushed *up*, and nothing pushed.
+
+So while the box is shaken sideways the bed is **loose**:
+
+- **When**: `g − gSlow` across `gSlow` above `A_LOOSE` (4 m/s²) and `|g|` away from its own 0.35 s average by more than `A_MAG` (2 m/s²), each peak-held over `LOOSE_HOLD` (0.15 s) so the zero crossings of a shake stay loose. A tilt, however quick, turns g without stretching it, and an up-and-down shake is along `gSlow`: neither loosens the bed, so piles still settle at the repose angle after a tilt, and a vertical shake still throws the bed up as one block as before. A sideways shake starts loosening at about 6.6 m/s² (where `|g|` grows by 2). The bed is loose only where the slow gravity in the plane beats the back glass (`|gSlow| > MU_GLASS·|gSlow.z|`, a phone tilted more than about 18° from flat): sand shoved up a wall must be able to run back down. On a flat phone the glass held the shoved sand where it was, which left a frozen cloud of grains in the upper half of the box and cracks through the bed after a hard shake (review, 2026-11-22). A flat phone shaken sideways now behaves as it did before the loose bed.
+- **Exaggerated**: while loose, the part of the shake across `gSlow` is scaled by `K_SHAKE` = 2 (`env.gSlow + K·(g − gSlow)` with the part along `gSlow` left at 1). The box is a 28 cm bottle at `PX_PER_M` = 3000 while the phone's screen is about 7 cm wide, so a hand shake's centimetre of travel is half as large against the box as it would be in the hand; 2 restores that. The magnitude stays below 60 m/s².
+- **Who moves**: the bed wakes whole when it turns loose. A grain with no free neighbour and no free cell within `PUSH_DEPTH` (14) cells straight up (against `gSlow`) is held by the weight above it: it sleeps and costs nothing. Grains with a free neighbour still follow the pile rules while slow, so steep faces and overhangs topple. The layer between moves ballistically even where it is supported, with the usual inelastic collisions and Coulomb friction, which is what lets it slide over the bed and slam into a wall.
+- **As a body**: each loose grain takes `VISC` (0.3) of the mean velocity of the grains touching it per substep, so the layer moves together instead of every grain row sliding on the one below.
+- **Pushing up the wall**: a loose grain that is blocked by a wall, a sleeping grain or a grain that was itself blocked this substep (a jammed mass, not a falling block waiting for the grains ahead to move on), and is faster than `V_PUSH` (300 px/s), may shove a line of grains, turned from its motion toward "up" (never down), one cell into the nearest free cell within `PUSH_LINE` (40) cells, and move into the first cell. A line of k grains takes the speed v / (1 + k/`PUSH_K`), and the shove happens with the chance that this speed carries it a cell in this substep, so short lines (near the surface, near the wall) move often and long ones rarely: the mass heaps up the wall instead of the whole bed rising. The shoved grains take that speed and the shover keeps it along the shove. Only grains within `PUSH_DEPTH` of the surface shove.
+- **Travel is spent**: a grain's sub-cell travel is clamped to its cell after each move. A shove ends the move with travel left over, and that leftover used to pile up into an offset of up to 16 cells, which drew grains outside the box (up to 22 of them in a 20 m/s² side shake; `outside` must stay 0).
+- **After**: when the shake stops the bed is no longer loose, every grain is back on the pile rules, and the heaps against the walls avalanche to the repose angle and fall asleep (measured: exact rest again within 0.5–0.75 s).
+
+What did not work, for the next person: making the whole bed loose with straight-ahead line shoves turned it into a gas (deep vertical chasms at the walls, the bed dilated to a cloud, horizontal stripes where whole rows shifted); shoving a line regardless of its length lifted columns faster than gravity could pull them back; treating a long line ahead of a grain as "jammed" made a jumping bed shear into vertical streaks; loosening on any `|g − gSlow|` (not only sideways and stretching) flattened the heaps after a quick 60° tilt to 26° (now 34.5°) and streaked the layers in a vertical shake; `K_SHAKE` along `gSlow` too made a vertical shake blow the bed apart.
 
 ## Drawing
 
@@ -77,6 +93,13 @@ Positions and the occupancy texture are uploaded only when something moved. The 
 | `V_MAX` | 3000 px/s | Keeps a flip's cost bounded (cost grows with cells travelled); a flip takes ~0.3 s instead of the free-fall 0.24 s |
 | `SUB_DT`, `SUB_DT_FEW`, `FEW` | 1/180, 1/480 s, 12% | See "A step" |
 | `PUSH` | 90 cells | How far a finger looks for room; 30 was too short for a finger deep in the pile |
+| `K_SHAKE` | 2 | Shake across `gSlow` while loose; see "Shaking". In Node, 20 m/s² 5 Hz side shake, upright: 1 moved 3.6% of the grains and piled 17 px, 2 moves 13% and piles 31 px, 2.5 moved 25% and piled 57 px but mixed the top half of the bed |
+| `A_LOOSE`, `A_MAG`, `LOOSE_HOLD` | 4, 2 m/s², 0.15 s | When the bed is loose: a sideways shake, not a tilt |
+| `VISC` | 0.3 | Velocity shared with touching grains per substep while loose |
+| `V_PUSH`, `PUSH_K`, `PUSH_LINE` | 300 px/s, 12, 40 cells | Shoves of a jammed loose mass; `PUSH_K` 4 piled 26 px where 12 piles 31 |
+| `PUSH_DEPTH` | 14 cells | Depth of the loose layer. 20 moved 18% instead of 13% for 30% more CPU; an unlimited depth let gaps open down the whole wall |
+| `SUB_DT_LOOSE` | 1/120 s | Halves the cost of a loose bed against 1/180 with about the same response |
+| `SCATTER_LOOSE` | 0.02 | `SCATTER` while loose: 0.08 sprayed the layer into a cloud |
 
 ## Measured
 
@@ -100,10 +123,28 @@ Per-frame step + render CPU (`__T.step(1)` one frame at a time through the smoke
 
 At rest the step is ~0. The heavy frames are the ones where every grain flies: a hard shake (high: 3.2 ms mean over that phase, p95 11.5) and the first 10–15 frames of turning the box over (p95 9 ms).
 
+Shaking, before → after the loose bed (headless Chromium, `__T`, 393×852, high, 15.3k grains; "upright" g = (0, 9.81, 0), "held back" g = (0, 6.9, 6.9), shakes from `__T.shake`; moving = faster than 30 px/s; heap = mean packed height of the 12 columns at a wall above the mean, peak):
+
+| | moving, mean / peak | centre-of-mass swing (box width) | heap at wall | surface tilt, peak | airborne, peak |
+|---|---|---|---|---|---|
+| side 20 m/s² 5 Hz 1 s, upright | 1.3% / 3.5% → 13% / 31% | 0.3% → 3.6% | 8 → 28 px | 4° → 10° | 0.2% → 2.2% |
+| side 20 m/s² 5 Hz 1 s, held back | 1.9% / 4.6% → 30% / 74% | 0.4% → 10% | 10 → 56 px | 4° → 25° | 0.3% → 3.8% |
+| hand 15 m/s² 6 Hz 1 s, held back | 1.5% / 3.8% → 11% / 29% | 0.2% → 2.5% | 5 → 19 px | 4° → 5° | 0.3% → 1.5% |
+
+Flick, 25 m/s² for 0.2 s (one half sine): the mass moves 0.8% → 8.3% of the width (upright; 1.2% → 9.5% held back), a slab heaps 109 px (137 px held back) up the far wall, the surface tilts 34° (40°) and avalanches back to a 26° (32°) slope across the box; under 1% of the grains are moving 0.33 s after the flick began and all are asleep after 0.57 s (1.33 s held back; before: 0.23 s, because almost nothing had moved). Vertical 20 m/s² 5 Hz: unchanged, the bed jumps as one block, centre of mass 55 px up at the peak. Rest after shaking: 0 grains change cell over 600 frames, upright and held back. `reposeAngle` after a 60° tilt 35.0° → 34.5°; poured heap 32.5° (unchanged).
+
+Cost of a loose bed: per frame step + render on the shared desktop (load 7–16), high: side shake held back 2.1 → 3.8 ms mean (p95 3.5 → 7.2), hand shake 2.0 → 2.0, flick 0.7 → 1.7 (p95 4.3). Medium with `--throttle 4`: side shake held back 7.0 → 14.4 ms mean (p95 26), hand shake 5.7 → 7.9 (p95 15), flick 1.9 → 6.8 (p95 16). `tools/smoke.py sand` shake phases 1.0 → 4.2 and 2.3 → 3.7 ms a frame (wall), with `--throttle 4` 3.6 → 13.9 and 10.9 → 13.7.
+
 ## Limits
 
 - It is a lattice. Resting sand sits on cells (hidden by per-grain offsets). A slope's angle can only take the grid's steps, so the repose angle is reached by thresholds tuned to them, not by friction alone.
 - An avalanche flows as a thin surface layer plus `SLAB`; a 50° tilt of a level surface takes about 1.5–2 s to settle, slower than real sand in a box this size.
 - A hard shake dilates the pile into rows and columns with one-cell gaps; the shadow fill hides most of them, but some seams show while it is shaking.
 - A finger shoves straight lines of grains, which smears the colour bands into streaks along the push direction.
-- Frames where all grains fly (flip, hard shake) cost 3–4× a typical frame; on a mid-range phone at medium they may drop to ~30–40 fps for a moment.
+- Frames where all grains fly (flip, hard shake) cost 3–4× a typical frame; on a mid-range phone at medium they may drop to ~30–40 fps for a moment. A loose bed costs 2–3× what the old shake did: a hard sideways shake at medium on a mid-range phone (estimated with `--throttle 4`) runs at 14 ms a frame on average.
+- The loose bed is a mechanism tuned by eye, not a granular stress model. Only the top `PUSH_DEPTH` cells move; the deep bed never shears. The grain shoved up a wall leaves its cell empty, and that hole travels back to the far wall, so a hard shake opens a narrow V-shaped gap down the wall the sand is leaving (up to ~100 px deep for a moment) before the sand slams back into it.
+- A hard sideways shake mixes the top two or three colour bands into speckle; a hand shake mixes mainly the top one. The bands below `PUSH_DEPTH` survive any shake.
+- A vertical shake makes the bed jump as a rigid block but does not loosen or flow; loosening it streaked the layers.
+- Held at a low tilt (24–30° from flat, in-plane gravity 4–5 m/s²), the shake is large against the gravity and the glass slows the heap's return: a 15 m/s² 6 Hz hand shake mixes bands 2–6 (held back at 45°, only the top band), and a 20 m/s² shake churns the whole bed into a dome that settles with its layers mixed.
+- A typical hand shake (15 m/s² at 6 Hz, about a centimetre) moves the body of the bed only a little: the centre of mass swings 2.4–3.1% of the width and the surface tilts about 7°. Mostly the top layer fizzes and heaps 17–28 px at the walls. A flick or a hard shake throws the mass. In Node, `VISC` 0.5, `PUSH_DEPTH` 20, `PUSH_K` 20 or `K_SHAKE` 2.5 raise the hand-shake swing to 3.0–4.8%, but each mixes the deeper layers 2–6 times more; they were left as they are until they can be tried in the hand.
+- Feel on a real phone is untested: the headless numbers use synthetic sine shakes, and the thresholds (`A_LOOSE`, `A_MAG`) against real sensor noise and walking are unverified.
