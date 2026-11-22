@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#05070d">
+<title>Tiltbox</title>
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Tiltbox">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage"></div>
+
+<div id="ui">
+  <button id="btn-menu" class="round" aria-label="Show modes">
+    <svg viewBox="0 0 24 24" width="22" height="22"><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/></svg>
+  </button>
+  <nav id="bar" class="shown">
+    <div id="modes"></div>
+    <div id="tools">
+      <button id="btn-reset" class="tool" aria-label="Refill">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/></svg>
+      </button>
+      <button id="btn-sound" class="tool" aria-label="Sound">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path class="fill" d="M4 9.5v5h3.5l4.5 4v-13l-4.5 4z"/>
+          <g class="waves"><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5"/><path d="M18 7a7 7 0 0 1 0 10"/></g>
+          <g class="cross"><path d="M16 9.5l5 5M21 9.5l-5 5"/></g>
+        </svg>
+      </button>
+    </div>
+  </nav>
+  <div id="toast"></div>
+  <pre id="debug"></pre>
+</div>
+
+<div id="start">
+  <div class="card">
+    <h1>Tiltbox</h1>
+    <p class="lead">Your screen is a glass box.<br>Tilt it, shake it, stir it with a finger.</p>
+    <button id="btn-start">Start</button>
+    <p class="hint touch-only">Allow motion access when asked.</p>
+    <p class="hint desk-only">← → tilt · space shake · drag to stir<br>or drag the browser window around</p>
+    <p class="hint warn" id="insecure">Tilt needs HTTPS: open the https:// address.</p>
+  </div>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
