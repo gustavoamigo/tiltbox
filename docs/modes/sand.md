@@ -44,7 +44,7 @@ A grain is **supported** if the cell below is a wall, or a grain that is asleep 
 
 Gravity turning more than 1.5°, or the back glass starting or stopping to hold the sand, wakes every grain with a free neighbour so the surface looks at its slopes again. On a flat phone (`MU_GLASS·|g.z|` above the in-plane gravity) nothing moves at all, unless it is shaken sideways harder than the glass holds; the bed then slides as a block (it never turns loose, see "Shaking").
 
-**Fingers** are 24 px discs swept from last frame's position to this one across the substeps. Each grain under one is shoved out along a line of cells: the most nearly outward direction, leaning "up", that reaches a free cell within 90 cells. The whole line shifts one cell into it. Deep in the pile the sand above the finger rises; near the surface the finger digs a trench that slumps back behind it. The grains nearest the finger take half its speed, so a flick throws sand.
+**Fingers** are 24 px discs swept from last frame's position to this one across the substeps; see "Fingers" below.
 
 **Resize**: if the grid size changes, the sand is stacked afresh against the wall gravity points at. Each line across that wall keeps about its grains, in their old order, so the heap's profile and the colour layers survive.
 
@@ -63,6 +63,32 @@ So while the box is shaken sideways the bed is **loose**:
 - **After**: when the shake stops the bed is no longer loose, every grain is back on the pile rules, and the heaps against the walls avalanche to the repose angle and fall asleep (measured: exact rest again within 0.5–0.75 s).
 
 What did not work, for the next person: making the whole bed loose with straight-ahead line shoves turned it into a gas (deep vertical chasms at the walls, the bed dilated to a cloud, horizontal stripes where whole rows shifted); shoving a line regardless of its length lifted columns faster than gravity could pull them back; treating a long line ahead of a grain as "jammed" made a jumping bed shear into vertical streaks; loosening on any `|g − gSlow|` (not only sideways and stretching) flattened the heaps after a quick 60° tilt to 26° (now 34.5°) and streaked the layers in a vertical shake; `K_SHAKE` along `gSlow` too made a vertical shake blow the bed apart.
+
+## Fingers: a stick through the sand
+
+A finger is a solid disc (`fingerR` 24 px) standing through the sand, swept from last frame's position to this one across the substeps. Each substep the cells under the disc are stamped `WALL`, so sand rests on the finger, slides off it by the pile rules, and its grains collide with it like with a wall. Cells the disc leaves are freed and wake their neighbours, so a wall or a roof left standing falls in.
+
+Each grain the disc moves onto goes the cheapest way out:
+- a **line**: along one of the eight directions out of the disc, shoving the run of grains beyond it one cell toward the first free cell (at most `PUSH` cells). Cost: the cells crossed plus the grains shoved, times 1 to 2 the less outward the line points. Near the surface this is cheapest: sand heaps up ahead of and beside the finger;
+- a **hop**: straight to the nearest free cell in a ring 3 cells wide around the disc, at `HOP` per cell. Deep in the pile this is cheapest: the sand flows round the finger into the room it just left, so the finger passes through and the sand closes behind it.
+
+A grain the finger runs into leaves at (1 + `FINGER_BOUNCE`) times the finger's speed into it (along the outward normal), plus `FINGER_OUT`, with a random spread of `FINGER_SPREAD` of that, and takes `FINGER_DRAG` of the finger's speed along its surface. The shoved run moves with it, slower the longer it is (`FINGER_RUN`). So the sand ahead keeps ahead of the finger as a bow wave, and a fast swipe throws a spray. A hopped grain takes `FINGER_DRAG` of the finger's velocity. Line scans and shoves are bounded by `FINGER_SCAN` cells a substep, so a finger pressed deep into packed sand (no room round it) clears its disc over 10–15 frames by heaving the sand above instead of stalling a frame.
+
+The owner's complaint (2026-11-22): "On the sand, when interacting via touch, it's not realistic", with a screenshot of a 400 px vertical cliff beside a dug channel and an overhang over a round hole at its bottom. The finger used to shove every grain under it one cell along the most outward line, leaning up, that reached a free cell within 90 cells. Deep in the pile that line went to the surface, so each stroke lifted whole columns: a raised block with vertical sides and a slot behind the finger, and the slot's walls drain only from the bottom grain of each column (the pile rules move a supported grain one cell; the column above falls from rest), about 170 px/s. Measured (headless Chromium, `__T`, high, held back g = (0, 6.9, 6.9), the settled bed's relief 40 px; wall = largest height step over 6 px). While the finger is down, its own disc is the only empty space inside the sand; before, the slot and overhangs above it were open too:
+
+| | finger down: steepest 20 px slope / wall / surface relief | 0.5 s after lifting | 1 s after | moves in 600 still frames after |
+|---|---|---|---|---|
+| dig: strokes up and down from 760 px to the surface, ending in the sand | 83° / 122 px / 192 px → 35° / 8 px / 40 px | 42° / 8 px → 35° / 4 px | 35° → 35° | 0 → 0 |
+| furrow: down from above the surface to 800 px at 400 px/s | 85° / 154 px / 260 px → 31° / 6 px / 38 px | 76° / 36 px → 35° / 6 px | 62° / 18 px, still moving → 35° | 691 → 0 |
+| plough: across, 12 px under the surface, 400 px/s | 75° / 60 px / 104 px → 70° / 44 px / 72 px | 35° → 35° | 35° → 35° | 0 → 0 |
+| flick: the same at 2000 px/s | 67° / 38 px / 78 px → 71° / 32 px / 76 px | 35° → 35° | 35° → 35° | 0 → 0 |
+| tap: resting 20 frames at the surface | 67° / 54 px / 72 px → 31° / 6 px / 44 px | 35° → 35° | 35° → 35° | 0 → 0 |
+
+Upright (g = (0, 9.81, 0)) gives the same picture: the furrow 85° / 158 px before, 31° / 6 px after, and before it was still at 54° and moving 1 s after lifting. Everything has settled at the repose angle by 0.5 s after it lifts (before: up to 1 s, and after the furrow grains were still changing cell 1–11 s after lifting). A plough at the surface heaps 42–48 px ahead of the finger against 20 px behind it (in Node; depth 10–30 px, 400 px/s). A finger dug in and pulled back up towards the surface still pushes the sand above it up and leaves a shaft under it for a moment (wall 130 px as it leaves the sand); that shaft has slumped to 39° 0.5 s after lifting.
+
+`HOP` is not sensitive: 1 heaps 32–40 px ahead (16–18 behind), 2 and 3 heap 44–50 px (22–24 behind), and the dig and the furrow stay as flat with any of them (relief 40–52 px with the finger down). Charging lines for the height they lift sand (tried as `LIFT`) did not stop the shaft and halved the bow wave.
+
+Cost (per frame step + render, desktop shared with other runs, so noisy): over each touch scenario plus 1 s after, high, mean 0.7–1.7 ms (before 0.9–3.0), worst frame 9–14 ms (before 8–36 ms, the deep dig). Medium with `--throttle 4`: mean 2.6–4.3 ms (before 2.4–7.6), p95 8–15 ms; the first frame of a touch is the worst, 34–80 ms against 30–97 ms before, with large run-to-run spread. Without a finger nothing changed: the grid steps bit for bit as before (tilt, shake, flat and flip in Node).
 
 ## Drawing
 
@@ -92,7 +118,11 @@ Positions and the occupancy texture are uploaded only when something moved. The 
 | `SCATTER`, `V_SCATTER` | 0.08, 400 px/s | Spray from slams. A random kick to all flying grains during shakes was tried and dropped: it sheared a falling block into vertical streaks |
 | `V_MAX` | 3000 px/s | Keeps a flip's cost bounded (cost grows with cells travelled); a flip takes ~0.3 s instead of the free-fall 0.24 s |
 | `SUB_DT`, `SUB_DT_FEW`, `FEW` | 1/180, 1/480 s, 12% | See "A step" |
-| `PUSH` | 90 cells | How far a finger looks for room; 30 was too short for a finger deep in the pile |
+| `PUSH` | 160 cells | How far a finger looks along a line for room (was 90, which left a finger pressed into the lower bed with nowhere to put its grains) |
+| `FINGER_SCAN` | 4000 cells | Line reads (a shove counts 4) per finger per substep; 20000 cost about 30 ms a frame (Node) while a deep press cleared |
+| `HOP` | 1.5 | Cost per cell of a hop round the finger; see "Fingers" |
+| `FINGER_BOUNCE`, `FINGER_OUT`, `FINGER_SPREAD` | 0.2, 60 px/s, 0.5 | Speed of a grain the finger runs into: more than the finger's, so it is not overrun, and spread so a flick sprays instead of lifting a sheet |
+| `FINGER_DRAG`, `FINGER_RUN` | 0.3, 6 cells | Speed along the finger a touched grain takes; how fast a shoved run slows with its length (giving speed only to the first two grains left a roof of lifted sand over the finger's trail) |
 | `K_SHAKE` | 2 | Shake across `gSlow` while loose; see "Shaking". In Node, 20 m/s² 5 Hz side shake, upright: 1 moved 3.6% of the grains and piled 17 px, 2 moves 13% and piles 31 px, 2.5 moved 25% and piled 57 px but mixed the top half of the bed |
 | `A_LOOSE`, `A_MAG`, `LOOSE_HOLD` | 4, 2 m/s², 0.15 s | When the bed is loose: a sideways shake, not a tilt |
 | `VISC` | 0.3 | Velocity shared with touching grains per substep while loose |
@@ -140,7 +170,9 @@ Cost of a loose bed: per frame step + render on the shared desktop (load 7–16)
 - It is a lattice. Resting sand sits on cells (hidden by per-grain offsets). A slope's angle can only take the grid's steps, so the repose angle is reached by thresholds tuned to them, not by friction alone.
 - An avalanche flows as a thin surface layer plus `SLAB`; a 50° tilt of a level surface takes about 1.5–2 s to settle, slower than real sand in a box this size.
 - A hard shake dilates the pile into rows and columns with one-cell gaps; the shadow fill hides most of them, but some seams show while it is shaking.
-- A finger shoves straight lines of grains, which smears the colour bands into streaks along the push direction.
+- A finger moving deep through the pile hops grains from its front to its back, so it leaves a 48 px wide band of mixed colour along its path. A finger pressed into packed sand with no room round it heaves the sand above it in straight columns, which slump afterwards.
+- A steep wall the finger leaves (pulling it up out of the sand) drains from the bottom of each column, at about 170 px/s; a real wall would slump faster.
+- Finger feel on a real phone is untested: the measurements use synthetic straight strokes at constant speed.
 - Frames where all grains fly (flip, hard shake) cost 3–4× a typical frame; on a mid-range phone at medium they may drop to ~30–40 fps for a moment. A loose bed costs 2–3× what the old shake did: a hard sideways shake at medium on a mid-range phone (estimated with `--throttle 4`) runs at 14 ms a frame on average.
 - The loose bed is a mechanism tuned by eye, not a granular stress model. Only the top `PUSH_DEPTH` cells move; the deep bed never shears. The grain shoved up a wall leaves its cell empty, and that hole travels back to the far wall, so a hard shake opens a narrow V-shaped gap down the wall the sand is leaving (up to ~100 px deep for a moment) before the sand slams back into it.
 - A hard sideways shake mixes the top two or three colour bands into speckle; a hand shake mixes mainly the top one. The bands below `PUSH_DEPTH` survive any shake.

@@ -49,7 +49,14 @@ export const P = {
   NR: 3, // cells: radius of the window the surface slope is measured over
   ACTIVE: 6, // substeps a grain counts as sliding after it last moved
   STIR: 2, // substeps a grain next to a sliding one counts as sliding
-  PUSH: 90, // cells: how far a finger looks for room to shove a grain into
+  PUSH: 160, // cells: how far a finger looks along a line for room to shove a grain into
+  FINGER_SCAN: 4000, // cells a finger may read along lines per substep (bounds a deep press)
+  HOP: 1.5, // cost per cell of a hop round the finger, against 1 per cell a line moves through or shoves
+  FINGER_BOUNCE: 0.2, // a grain the finger runs into leaves at (1 + this) times the finger's speed into it...
+  FINGER_OUT: 60, // px/s ...plus this, outward
+  FINGER_SPREAD: 0.5, // random spread of that, as a fraction of the finger's speed into it
+  FINGER_DRAG: 0.3, // part of the finger's speed along its surface a touched grain takes
+  FINGER_RUN: 6, // cells: a run of k grains a finger shoves moves at 1 / (1 + (k-1)/this) of the first's speed
   SCATTER: 0.08, // random sideways kick on a hard collision, as a fraction of the speed lost
   V_SCATTER: 400, // px/s: collisions harder than this scatter
   V_MAX: 3000, // px/s cap (1 m/s)
@@ -155,6 +162,7 @@ export class SandGrid {
     this.rowLo = new Int32Array(gh).fill(gw); this.rowHi = new Int32Array(gh).fill(-1);
     this.colLo = new Int32Array(gw).fill(gh); this.colHi = new Int32Array(gw).fill(-1);
     this.nAwake = 0;
+    this.fingerCells = []; // finger discs stamped into the old grid are gone
     if (this.n) this.restack(ogw, ogh, g);
   }
 
@@ -728,72 +736,150 @@ export class SandGrid {
   }
 
   // A finger is a stick through the sand, swept from where it was last frame to where it is now
-  // (u: how far through the frame). Each grain under it is shoved out along a line of cells: the
-  // most nearly outward direction (leaning "up") that reaches a free cell within PUSH cells. The
-  // whole line shifts by one cell into that free cell, so deep in the pile the sand above the
-  // finger rises, near the surface the finger digs a trench that slumps back behind it, and the
-  // grains it shoves take some of its speed (a flick throws sand).
+  // (u: how far through the frame). It is an obstacle: the cells under its disc are WALL for the
+  // substep, so sand rests on it, slides off it at the repose angle and closes in behind it. Each
+  // grain the disc moves onto goes the cheapest way out of the disc: either along one of the eight
+  // grid lines, shoving the grains beyond it one cell toward the nearest free cell (near the
+  // surface: sand heaps up ahead of and beside the finger), or straight to the nearest free cell
+  // around the disc (deep: sand flows round the finger into the room it just left). Cost is about
+  // the cells moved: a line costs its length through the disc plus the grains it shoves, more the
+  // less outward it points; a hop costs HOP per cell of its distance. A grain the finger runs into
+  // takes the finger's speed into it, so the sand ahead is pushed on and a flick throws a spray.
+  // Cells the disc leaves wake their neighbours, so walls and roofs it leaves behind fall in.
   applyFingers(u, ctx) {
     const F = this.fingers;
-    if (!F.length) return;
-    const { gw, gh, occ, vx, vy, stride, sx, sy } = this;
-    const R = this.fingerR, maxK = P.PUSH;
+    const { gw, gh, occ, vx, vy, act, stride, sx, sy } = this;
+    const stamped = this.fingerCells || (this.fingerCells = []);
+    if (!F.length && !stamped.length) return;
+    // Lift last substep's discs. A cell that held a grain in the old disc but not the new one is
+    // free again: its neighbours look at their new surroundings.
+    for (const c of stamped) if (occ[c] === WALL) occ[c] = EMPTY;
+    const left = this.fingerLeft || (this.fingerLeft = []);
+    left.length = 0;
+    for (const c of stamped) left.push(c);
+    stamped.length = 0;
+    const R = this.fingerR, R2 = R * R;
+    const ring = (3 * Math.max(sx, sy)); // px beyond the disc a hop may land
     const list = this.pushList || (this.pushList = []);
+    const free = this.ringFree || (this.ringFree = []);
     for (const f of F) {
       const fx = f.x0 + (f.x - f.x0) * u, fy = f.y0 + (f.y - f.y0) * u;
+      const inDisc = (x, y) => {
+        const dx = (x + 0.5) * sx - fx, dy = (y + 0.5) * sy - fy;
+        return dx * dx + dy * dy < R2;
+      };
       const x0 = Math.max(0, Math.floor((fx - R) / sx)), x1 = Math.min(gw - 1, Math.floor((fx + R) / sx));
       const y0 = Math.max(0, Math.floor((fy - R) / sy)), y1 = Math.min(gh - 1, Math.floor((fy + R) / sy));
-      // grains under the finger, outermost first, so each line shifts out cleanly
+      // Stamp the free cells of the disc first, so nothing is shoved into it; list its grains.
       list.length = 0;
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const dx = (x + 0.5) * sx - fx, dy = (y + 0.5) * sy - fy;
           const d2 = dx * dx + dy * dy;
-          if (d2 < R * R && occ[this.idx(x, y)] >= 0) list.push(d2, x, y);
+          if (d2 >= R2) continue;
+          const c = this.idx(x, y);
+          if (occ[c] === EMPTY) { occ[c] = WALL; stamped.push(c); } else if (occ[c] >= 0) list.push(d2, x, y);
         }
       }
       const m = list.length / 3;
+      if (!m) continue;
+      // Free cells in a ring just outside the disc, for hops.
+      free.length = 0;
+      const Ro = R + ring, Ro2 = Ro * Ro;
+      const rx0 = Math.max(0, Math.floor((fx - Ro) / sx)), rx1 = Math.min(gw - 1, Math.floor((fx + Ro) / sx));
+      const ry0 = Math.max(0, Math.floor((fy - Ro) / sy)), ry1 = Math.min(gh - 1, Math.floor((fy + Ro) / sy));
+      for (let y = ry0; y <= ry1; y++) {
+        for (let x = rx0; x <= rx1; x++) {
+          const dx = (x + 0.5) * sx - fx, dy = (y + 0.5) * sy - fy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < R2 || d2 >= Ro2) continue;
+          if (occ[this.idx(x, y)] === EMPTY) free.push(x, y);
+        }
+      }
+      // Cells a finger may read looking along lines this substep: a finger pressed deep into the
+      // pile, with no room round it, clears over a few substeps instead of stalling one.
+      let budget = P.FINGER_SCAN;
+      // outermost first: they have the shortest way out
       const order = this.pushOrder && this.pushOrder.length >= m ? this.pushOrder : (this.pushOrder = new Int32Array(Math.max(64, m * 2)));
       for (let k = 0; k < m; k++) order[k] = k;
       order.subarray(0, m).sort((a, b) => list[3 * b] - list[3 * a]);
       for (let t = 0; t < m; t++) {
         const k = order[t], x = list[3 * k + 1], y = list[3 * k + 2];
         const c = this.idx(x, y);
-        if (occ[c] < 0) continue;
+        const g = occ[c];
+        if (g < 0) continue;
         let dx = (x + 0.5) * sx - fx, dy = (y + 0.5) * sy - fy;
         const d = Math.sqrt(dx * dx + dy * dy);
         if (d > 1e-3) { dx /= d; dy /= d; } else { dx = -ctx.ux; dy = -ctx.uy; }
-        // the eight directions, most outward first, "up" breaking ties
-        let tried = 0;
-        for (let pass = 0; pass < 8; pass++) {
-          let e = -1, best = -9;
-          for (let q = 0; q < 8; q++) {
-            if (tried & (1 << q)) continue;
-            const sc = (DX[q] * dx + DY[q] * dy) * DL[q] - 0.6 * (DX[q] * ctx.ux + DY[q] * ctx.uy) * DL[q];
-            if (sc > best) { best = sc; e = q; }
-          }
-          tried |= 1 << e;
-          const step = DY[e] * stride + DX[e];
-          let kk = 1;
-          while (kk <= maxK && occ[c + kk * step] >= 0) kk++;
-          if (kk > maxK || occ[c + kk * step] !== EMPTY) continue;
-          // shift the line out by one cell, farthest grain first; the grains near the finger take
-          // its speed, and every grain of the line wakes to look at its new neighbourhood
-          for (let j = kk - 1; j >= 0; j--) {
-            const from = c + j * step, g = occ[from];
-            this.shift(g, from, from + step);
-            if (j < 3) {
-              vx[g] += (f.vx - vx[g]) * 0.5 + DX[e] * DL[e] * 120;
-              vy[g] += (f.vy - vy[g]) * 0.5 + DY[e] * DL[e] * 120;
-            }
-            this.act[g] = P.ACTIVE;
-          }
-          this.wakeAround(c + kk * step, 2, P.STIR);
-          this.wakeAround(c, 2, P.STIR);
-          break;
+        // A hop to the nearest free cell around the disc.
+        let best = 1e9, hop = -1;
+        for (let q = 0; q < free.length; q += 2) {
+          const ex = free[q] - x, ey = free[q + 1] - y;
+          const e2 = ex * ex + ey * ey;
+          if (e2 < best) { best = e2; hop = q; }
         }
+        best = hop >= 0 ? Math.sqrt(best) * P.HOP : 1e9;
+        // A line: out of the disc along e, then the run of grains beyond it to a free cell.
+        let line = -1, exit = 0, run = 0;
+        for (let e = 0; e < 8 && budget > 0; e++) {
+          const out = (DX[e] * dx + DY[e] * dy) * DL[e];
+          let X = x, Y = y, j = 0;
+          do { X += DX[e]; Y += DY[e]; j++; } while (X >= 0 && Y >= 0 && X < gw && Y < gh && inDisc(X, Y));
+          if (X < 0 || Y < 0 || X >= gw || Y >= gh) continue;
+          const c1 = this.idx(X, Y), step = DY[e] * stride + DX[e];
+          // a run longer than the best cost so far cannot win: stop looking there
+          const rMax = Math.min(P.PUSH, best);
+          let r = 0;
+          while (r <= rMax && occ[c1 + r * step] >= 0) r++;
+          budget -= j + r;
+          if (r > rMax || occ[c1 + r * step] !== EMPTY) continue;
+          const cost = (j / DL[e] + r) * (1.5 - 0.5 * out);
+          if (cost < best) { best = cost; line = e; exit = c1; run = r; }
+        }
+        // The finger's speed into the grain (along the outward normal) is passed on whole, with a
+        // little bounce and a random spread, so the grains ahead are thrown clear of the finger
+        // and a flick breaks into spray; of the speed along the surface only a part.
+        const vn = f.vx * dx + f.vy * dy;
+        const vnp = vn > 0 ? vn : 0;
+        const kick = P.FINGER_BOUNCE * vnp + P.FINGER_OUT, spread = P.FINGER_SPREAD * vnp;
+        const tvx = (f.vx - vn * dx) * P.FINGER_DRAG, tvy = (f.vy - vn * dy) * P.FINGER_DRAG;
+        if (line >= 0) {
+          const e = line, step = DY[e] * stride + DX[e];
+          budget -= 4 * run; // a shift costs about four reads
+          for (let j = run; j >= 1; j--) {
+            const from = exit + (j - 1) * step, h = occ[from];
+            this.shift(h, from, from + step);
+            // the run moves with the grain it is shoved by, slower the longer it is (deep sand is heavy)
+            const share = 1 / (1 + (j - 1) / P.FINGER_RUN);
+            const ux = (dx * (vnp + kick) + tvx + (rnd() - 0.5) * spread) * share;
+            const uy = (dy * (vnp + kick) + tvy + (rnd() - 0.5) * spread) * share;
+            if ((vx[h] - ux) * dx + (vy[h] - uy) * dy < 0) { vx[h] = ux; vy[h] = uy; }
+            act[h] = P.ACTIVE;
+          }
+          this.shift(g, c, exit);
+          vx[g] = dx * (vnp + kick) + tvx + (rnd() - 0.5) * spread;
+          vy[g] = dy * (vnp + kick) + tvy + (rnd() - 0.5) * spread;
+          this.wakeAround(exit + run * step, 2, P.STIR);
+          // the hop list may hold the cell the line ended in
+          if (free.length) {
+            const ec = exit + run * step;
+            for (let q = 0; q < free.length; q += 2) if (this.idx(free[q], free[q + 1]) === ec) { free[q] = free[free.length - 2]; free[q + 1] = free[free.length - 1]; free.length -= 2; break; }
+          }
+        } else if (hop >= 0) {
+          const to = this.idx(free[hop], free[hop + 1]);
+          free[hop] = free[free.length - 2]; free[hop + 1] = free[free.length - 1]; free.length -= 2;
+          this.shift(g, c, to);
+          vx[g] = f.vx * P.FINGER_DRAG; vy[g] = f.vy * P.FINGER_DRAG; // dragged along in the wake
+          this.wakeAround(to, 1, P.STIR);
+        } else {
+          continue; // nowhere to go: it stays under the finger this substep
+        }
+        act[g] = P.ACTIVE;
+        occ[c] = WALL; stamped.push(c);
       }
     }
+    // Cells the discs left: their neighbours wake (a wall or a roof left standing falls in).
+    for (const c of left) if (occ[c] === EMPTY) this.wakeAround(c, 1, P.STIR);
   }
 
   // Slope of the pile's free surface against the gravity-perpendicular, degrees: the surface
